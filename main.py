@@ -217,7 +217,7 @@ T = {
     "pay_method_q": {"uz": "💳 To'lov usuli:", "ru": "💳 Способ оплаты:"},
     "pay_amt_q":    {"uz": "💵 *Summa (ming so'mda):*\n📌 Misol: `500` = 500 000 so'm", "ru": "💵 *Сумма (в тысячах):*\n📌 Пример: `500` = 500 000 сум"},
     "pay_rate_q":   {"uz": "💱 *Dollar kursi (to'liq raqam):*\n📌 Misol: `12800` (1$=12800 so'm)", "ru": "💱 *Курс доллара (полное число):*\n📌 Пример: `12800` (1$=12800 сум)"},
-    "pay_usd_q":    {"uz": "💵 *Dollar miqdori:*\n📌 Misol: `50` = $50", "ru": "💵 *Сумма в долларах:*\n📌 Пример: `50` = $50"},
+    "pay_usd_q":    {"uz": "💵 *Dollar miqdori:*\n📌 Misol: `50` = :50", "ru": "💵 *Сумма в долларах:*\n📌 Пример: `50` = :50"},
     "pay_added":    {"uz": "✅ {method}: {amt} so'm\n⏳ Qoldiq: {rem} so'm", "ru": "✅ {method}: {amt} сум\n⏳ Остаток: {rem} сум"},
     "pay_done":     {"uz": "✅ *To'lov №{id}*\n💰 Jami: {total} so'm", "ru": "✅ *Оплата №{id}*\n💰 Итого: {total} сум"},
     "pay_methods":  {
@@ -412,8 +412,8 @@ def load_langs():
         logger.warning(f"load_langs: {e}")
 
 def _save_setting(key, value):
-    db_run("DELETE FROM settings WHERE key=:1", [key])
-    db_run("INSERT INTO settings(key, value) VALUES(:1, :2)", [key, json.dumps(value)])
+    db_run("DELETE FROM settings WHERE key=$1", [key])
+    db_run("INSERT INTO settings(key, value) VALUES($1, $2)", [key, json.dumps(value)])
 
 def save_lang(uid, l):
     USER_LANG[uid] = l
@@ -444,12 +444,12 @@ def add_order(o):
     ])
     ph = o.get("phone","").strip()
     if ph:
-        existing = db_run("SELECT order_ids FROM clients WHERE phone=:1", [ph], fetch=True)
+        existing = db_run("SELECT order_ids FROM clients WHERE phone=$1", [ph], fetch=True)
         if existing:
             ids = json.loads(existing[0]["order_ids"]) + [o["id"]]
-            db_run("UPDATE clients SET order_ids=:1 WHERE phone=:2", [json.dumps(ids), ph])
+            db_run("UPDATE clients SET order_ids=$1 WHERE phone=$2", [json.dumps(ids), ph])
         else:
-            db_run("INSERT INTO clients(phone,name,order_ids) VALUES(:1,:2,:3)",
+            db_run("INSERT INTO clients(phone,name,order_ids) VALUES($1,$2,$3)",
                    [ph, o["client"], json.dumps([o["id"]])])
 
 def _row_to_order(row):
@@ -465,7 +465,7 @@ def _row_to_order(row):
     return o
 
 def get_order(oid):
-    rows = db_run("SELECT * FROM orders WHERE id=:1", [oid], fetch=True)
+    rows = db_run("SELECT * FROM orders WHERE id=$1", [oid], fetch=True)
     return _row_to_order(rows[0]) if rows else None
 
 def upd_order(oid, u):
@@ -486,7 +486,7 @@ def open_orders():
     return [_row_to_order(r) for r in rows]
 
 def today_orders():
-    rows = db_run("SELECT * FROM orders WHERE date=:1 ORDER BY id", [date.today().isoformat()], fetch=True)
+    rows = db_run("SELECT * FROM orders WHERE date=$1 ORDER BY id", [date.today().isoformat()], fetch=True)
     return [_row_to_order(r) for r in rows]
 
 def all_orders_list():
@@ -505,7 +505,7 @@ def all_debts():
     return r
 
 def client_history(phone):
-    rows = db_run("SELECT order_ids FROM clients WHERE phone=:1", [phone], fetch=True)
+    rows = db_run("SELECT order_ids FROM clients WHERE phone=$1", [phone], fetch=True)
     if not rows: return []
     ids = rows[0]["order_ids"]
     if isinstance(ids, str): ids = json.loads(ids)
@@ -519,7 +519,7 @@ def client_history(phone):
 def search_by_car(car_num):
     """Поиск по номеру машины"""
     rows = db_run(
-        "SELECT * FROM orders WHERE UPPER(car_num)=UPPER(:1) OR UPPER(car) LIKE UPPER(:2) ORDER BY id DESC",
+        "SELECT * FROM orders WHERE UPPER(car_num)=UPPER($1) OR UPPER(car) LIKE UPPER($2) ORDER BY id DESC",
         [car_num, f"%{car_num}%"], fetch=True
     )
     return [_row_to_order(r) for r in rows]
