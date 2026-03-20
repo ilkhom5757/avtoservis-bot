@@ -2,6 +2,7 @@
 """AVTOSERVIS BOT v2.1"""
 
 import os, json, logging, re
+import pg8000
 import pg8000.native
 from datetime import datetime, date
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
@@ -335,10 +336,10 @@ def svc_needs_subs(svc, uid): return svc in T["svc_with_subs"][lg(uid)]
 def get_conn():
     """Открыть соединение с PostgreSQL"""
     import urllib.parse
+    import pg8000
     url = DATABASE_URL
-    # Парсим URL: postgresql://user:pass@host:port/db
     r = urllib.parse.urlparse(url)
-    return pg8000.native.Connection(
+    conn = pg8000.connect(
         host=r.hostname,
         port=r.port or 5432,
         database=r.path.lstrip("/"),
@@ -346,19 +347,29 @@ def get_conn():
         password=r.password,
         ssl_context=True if "railway" in (r.hostname or "") else None,
     )
+    return conn
 
 def db_run(sql, params=None, fetch=False):
     """Выполнить запрос и вернуть результаты"""
+    import re as _re
+    # Convert $1,$2 style to %s for pg8000 cursor
+    pg_sql = _re.sub(r'\$\d+', '%s', sql)
     conn = get_conn()
     try:
-        if params:
-            result = conn.run(sql, *params)
+        cur = conn.cursor()
+        if params is not None and len(params) > 0:
+            cur.execute(pg_sql, params)
         else:
-            result = conn.run(sql)
+            cur.execute(pg_sql)
         if fetch:
-            cols = [c["name"] for c in conn.columns]
-            return [dict(zip(cols, row)) for row in result]
-        return result
+            cols = [d[0] for d in cur.description] if cur.description else []
+            rows = cur.fetchall()
+            return [dict(zip(cols, row)) for row in rows]
+        conn.commit()
+        return []
+    except Exception as e:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
