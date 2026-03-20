@@ -958,10 +958,93 @@ async def part_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not o or o["status"] == "closed":
             await update.message.reply_text(tr("not_found", uid)); return P_ORDER
         ctx.user_data["order_id"] = oid
-        await update.message.reply_text(tr("part_hint", uid), parse_mode="Markdown", reply_markup=kb_done_cancel(uid))
-        return P_LINES
+        await update.message.reply_text(tr("part_name_q", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
+        return P_NAME
     except:
         await update.message.reply_text(tr("enter_num", uid)); return P_ORDER
+
+async def part_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_cancel(update.message.text, uid): return await cancel(update, ctx)
+    ctx.user_data["part_name"] = update.message.text.strip()
+    sources = [tr("src_client", uid), tr("src_bought", uid), tr("src_stock", uid)]
+    await update.message.reply_text(
+        tr("part_source_q", uid, name=ctx.user_data["part_name"]),
+        parse_mode="Markdown", reply_markup=kb_list(sources, uid, cols=1)
+    )
+    return P_SOURCE
+
+async def part_source(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_cancel(update.message.text, uid): return await cancel(update, ctx)
+    sources = [tr("src_client", uid), tr("src_bought", uid), tr("src_stock", uid)]
+    if update.message.text not in sources:
+        await update.message.reply_text(
+            tr("part_source_q", uid, name=ctx.user_data["part_name"]),
+            parse_mode="Markdown", reply_markup=kb_list(sources, uid, cols=1))
+        return P_SOURCE
+    ctx.user_data["part_source"] = update.message.text
+    if update.message.text == tr("src_client", uid):
+        ctx.user_data["part_cost"] = 0
+        await update.message.reply_text(tr("part_work_q", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
+        return P_SELL
+    elif update.message.text == tr("src_bought", uid):
+        await update.message.reply_text(tr("part_cost_q", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
+        return P_COST
+    else:
+        ctx.user_data["part_cost"] = 0
+        await update.message.reply_text(tr("part_sell_q", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
+        return P_SELL
+
+async def part_cost(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_cancel(update.message.text, uid): return await cancel(update, ctx)
+    try:
+        ctx.user_data["part_cost"] = int(update.message.text.replace(" ", "")) * 1000
+        await update.message.reply_text(tr("part_sell_q", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
+        return P_SELL
+    except:
+        await update.message.reply_text(tr("enter_num", uid)); return P_COST
+
+async def part_sell(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_cancel(update.message.text, uid): return await cancel(update, ctx)
+    try:
+        sell = int(update.message.text.replace(" ", "")) * 1000
+        cost = ctx.user_data.get("part_cost", 0)
+        part = {
+            "name": ctx.user_data["part_name"],
+            "source": ctx.user_data["part_source"],
+            "cost_price": cost,
+            "sell_price": sell
+        }
+        oid = ctx.user_data["order_id"]
+        o = get_order(oid)
+        upd_order(oid, {"parts": o.get("parts", []) + [part]})
+        margin_line = f" | 📈 {fmt(sell-cost)}" if (is_owner(uid) and sell > cost) else ""
+        msg = tr("part_added", uid, name=part["name"], sell=fmt(sell) + margin_line)
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        await notify(ctx, f"🔩 #{oid} | {part['name']} — {fmt(sell)} сум", uid)
+        await update.message.reply_text(
+            "➕",
+            reply_markup=ReplyKeyboardMarkup([
+                [KeyboardButton("➕ Yana / Ещё"), KeyboardButton(tr("done", uid))],
+                [KeyboardButton(tr("cancel", uid))]
+            ], resize_keyboard=True)
+        )
+        return P_MORE
+    except:
+        await update.message.reply_text(tr("enter_num", uid)); return P_SELL
+
+async def part_more(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    text = update.message.text
+    if is_cancel(text, uid): return await cancel(update, ctx)
+    if is_done(text, uid):
+        await update.message.reply_text("✅", reply_markup=kb_main(uid))
+        return ConversationHandler.END
+    await update.message.reply_text(tr("part_name_q", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
+    return P_NAME
 
 async def part_lines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
