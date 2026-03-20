@@ -3,10 +3,10 @@
 
 import os, json, logging, re
 from datetime import datetime, date
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    ConversationHandler, ContextTypes, filters
+    ConversationHandler, ContextTypes, filters, CallbackQueryHandler
 )
 
 TOKEN    = os.environ.get("BOT_TOKEN", "ТВОЙ_ТОКЕН")
@@ -57,6 +57,8 @@ T = {
     "btn_debts":    {"uz": "💸 Qarzlar",             "ru": "💸 Долги"},
     "btn_staff":    {"uz": "👥 Xodimlar",            "ru": "👥 Сотрудники"},
     "btn_myreport": {"uz": "📊 Mening hisobotim",    "ru": "📊 Мой отчёт"},
+    "btn_kassa":    {"uz": "💵 Kassa",               "ru": "💵 Касса"},
+    "btn_add_svc":  {"uz": "➕ Xizmat qo'shish",      "ru": "➕ Добавить услугу"},
 
     # Приёмка
     "accept_hint": {
@@ -68,8 +70,8 @@ T = {
         "ru": "❌ Неверный формат!\nПравильно: `номер * марка * имя`\nПример: `10C444TA * Nexia * Алишер`"
     },
     "accept_phone": {
-        "uz": "📱 Telefon raqami:\n_(misol: 901112233)_\n_(yoki O'tkazib)_",
-        "ru": "📱 Телефон клиента:\n_(пример: 901112233)_\n_(или Пропустить)_"
+        "uz": "📱 *Telefon raqami (majburiy):*\n📌 Misol: `901112233`",
+        "ru": "📱 *Телефон клиента (обязательно):*\n📌 Пример: `901112233`"
     },
     "phone_err": {
         "uz": "❌ Noto'g'ri format!\nMisol: `901112233` (9 raqam)",
@@ -92,16 +94,30 @@ T = {
 
     # Подвиды услуг
     "svc_sub_price": {
-        "uz": "💰 Narxini kiriting (ming so'mda):\nMisol: `50` = 50 000 so'm",
-        "ru": "💰 Введи цену (в тысячах):\nПример: `50` = 50 000 сум"
+        "uz": "💰 *Narxini kiriting (ming so'mda):*\n📌 Misol: `50` = 50 000 so'm",
+        "ru": "💰 *Введи цену (в тысячах):*\n📌 Пример: `50` = 50 000 сум"
     },
     "svc_works_hint": {
-        "uz": ("📋 *Bajarilgan ishlar ro'yxatini kiriting*\nHar bir ish yangi qatorda:\n\n"
-               "Misol:\n`Moy almashtirish`\n`Tormoz kolodkasi`\n`Havo filtr`\n\n"
-               "_Keyin har biri uchun narx so'raladi_"),
-        "ru": ("📋 *Введи список выполненных работ*\nКаждая работа с новой строки:\n\n"
-               "Пример:\n`Замена масла`\n`Замена колодок`\n`Воздушный фильтр`\n\n"
-               "_Потом по каждой спросит цену_")
+        "uz": ("📋 *Bajarilgan ishlar ro'yxatini kiriting*\n"
+               "Har bir ish yangi qatorda:\n\n"
+               "📌 Misol:\n`Moy almashtirish`\n`Tormoz kolodkasi`\n`Havo filtr`"),
+        "ru": ("📋 *Введи список работ*\n"
+               "Каждая работа с новой строки:\n\n"
+               "📌 Пример:\n`Замена масла`\n`Замена колодок`\n`Воздушный фильтр`")
+    },
+    "svc_works_prices_hint": {
+        "uz": ("💰 *Narxlarni kiriting (ming so'mda)*\n"
+               "Har bir narx yangi qatorda, xuddi shu tartibda:\n\n"
+               "📌 Misol ({works}):\n{example}\n\n"
+               "_`50` = 50 000 so'm_"),
+        "ru": ("💰 *Введи цены (в тысячах)*\n"
+               "Каждая цена с новой строки, в том же порядке:\n\n"
+               "📌 Пример ({works}):\n{example}\n\n"
+               "_`50` = 50 000 сум_")
+    },
+    "svc_works_mismatch": {
+        "uz": "❌ Narxlar soni ({n_prices}) ishlar soniga ({n_works}) mos kelmaydi!\nQayta kiriting:",
+        "ru": "❌ Количество цен ({n_prices}) не совпадает с количеством работ ({n_works})!\nВведи заново:"
     },
     "svc_work_price": {
         "uz": "💰 *{work}*\nNarxi ming so'mda:\n📌 Misol: `50` = 50 000 so'm",
@@ -158,16 +174,18 @@ T = {
 
     # Запчасти
     "part_hint": {
-        "uz": ("🔩 *Ehtiyot qism*\n\nHar bir qatorga:\n"
+        "uz": ("🔩 *Ehtiyot qism*\n\nHar bir qatorga (ming so'mda):\n"
                "`nomi tannarxi mijoznarxi`\n\n"
-               "📌 Misol:\n`Sharovoy 350000 420000`\n`Amortizator 250000 310000`\n\n"
-               "_(Mijoz olib kelgan: `nomi narxi`)_\n\n"
-               "Tayyor bo'lsa — *Tayyor* tugmasini bosing"),
-        "ru": ("🔩 *Запчасти*\n\nКаждая с новой строки:\n"
+               "📌 Misol:\n`Sharovoy 350 420`\n`Amortizator 250 310`\n\n"
+               "_(Mijoz olib keldi — faqat ish narxi: `nomi narxi`)_\n"
+               "_(Ombordan — faqat mijoz narxi: `nomi mijoznarxi`)_\n\n"
+               "Tayyor — *Tayyor* tugmasini bosing"),
+        "ru": ("🔩 *Запчасти* (суммы в тысячах)\n\nКаждая с новой строки:\n"
                "`название себестоимость цена_клиенту`\n\n"
-               "📌 Пример:\n`Шаровой левый 350000 420000`\n`Амортизатор пер 250000 310000`\n\n"
-               "_(Клиент привёз: `название цена`)_\n\n"
-               "Когда готово — нажми *Готово*")
+               "📌 Пример:\n`Шаровой левый 350 420`\n`Амортизатор пер 250 310`\n\n"
+               "_(Клиент привёз — только цена работы: `название цена`)_\n"
+               "_(Со склада — только цена клиенту: `название цена`)_\n\n"
+               "Готово — нажми *Готово*")
     },
     "part_more":     {"uz": "➕ Yana qo'shing yoki *Tayyor*:", "ru": "➕ Ещё или *Готово*:"},
     "part_done_msg": {"uz": "✅ *{n} ta qo'shildi №{id}*\n{lines}", "ru": "✅ *{n} запч. к №{id}*\n{lines}"},
@@ -180,7 +198,7 @@ T = {
     "exp_title":   {"uz": "📤 *Xarajat*\n", "ru": "📤 *Расход*\n"},
     "exp_type_q":  {"uz": "Xarajat turi:",  "ru": "Тип расхода:"},
     "exp_desc_q":  {"uz": "📝 Izoh (yoki O'tkazib):", "ru": "📝 Описание (или Пропустить):"},
-    "exp_amt_q":   {"uz": "💸 *Summa (so'm):*\n📌 Misol: `60000`", "ru": "💸 *Сумма (сум):*\n📌 Пример: `60000`"},
+    "exp_amt_q":   {"uz": "💸 *Xarajat summasi (ming so'mda):*\n📌 Misol: `60` = 60 000 so'm", "ru": "💸 *Сумма расхода (в тысячах):*\n📌 Пример: `60` = 60 000 сум"},
     "exp_done":    {"uz": "📤 Xarajat #{id}: {type} — {amt} so'm", "ru": "📤 Расход #{id}: {type} — {amt} сум"},
     "exp_benzin":  {"uz": "🚗 Benzin/yetkazish",   "ru": "🚗 Бензин/доставка"},
     "exp_parts":   {"uz": "🛒 Ehtiyot qism sotib", "ru": "🛒 Покупка запчастей"},
@@ -196,9 +214,9 @@ T = {
                "─────────────\n💰 *Итого: {total} сум*\n✅ Оплачено: {paid} сум\n⏳ *Остаток: {remaining} сум*")
     },
     "pay_method_q": {"uz": "💳 To'lov usuli:", "ru": "💳 Способ оплаты:"},
-    "pay_amt_q":    {"uz": "💵 *Summa (so'm):*\n📌 Misol: `500000`", "ru": "💵 *Сумма (сум):*\n📌 Пример: `500000`"},
-    "pay_rate_q":   {"uz": "💱 *Dollar kursi:*\n📌 Misol: `12800` (1$=12800 so'm)", "ru": "💱 *Курс доллара:*\n📌 Пример: `12800` (1$=12800 сум)"},
-    "pay_usd_q":    {"uz": "💵 Dollar miqdori ($):", "ru": "💵 Сумма в долларах ($):"},
+    "pay_amt_q":    {"uz": "💵 *Summa (ming so'mda):*\n📌 Misol: `500` = 500 000 so'm", "ru": "💵 *Сумма (в тысячах):*\n📌 Пример: `500` = 500 000 сум"},
+    "pay_rate_q":   {"uz": "💱 *Dollar kursi (to'liq raqam):*\n📌 Misol: `12800` (1$=12800 so'm)", "ru": "💱 *Курс доллара (полное число):*\n📌 Пример: `12800` (1$=12800 сум)"},
+    "pay_usd_q":    {"uz": "💵 *Dollar miqdori:*\n📌 Misol: `50` = $50", "ru": "💵 *Сумма в долларах:*\n📌 Пример: `50` = $50"},
     "pay_added":    {"uz": "✅ {method}: {amt} so'm\n⏳ Qoldiq: {rem} so'm", "ru": "✅ {method}: {amt} сум\n⏳ Остаток: {rem} сум"},
     "pay_done":     {"uz": "✅ *To'lov №{id}*\n💰 Jami: {total} so'm", "ru": "✅ *Оплата №{id}*\n💰 Итого: {total} сум"},
     "pay_methods":  {
@@ -222,6 +240,20 @@ T = {
     "card_debt":     {"uz": " 💸QARZ", "ru": " 💸ДОЛГ"},
     "status_work":   {"uz": "ishda 🔧", "ru": "в работе 🔧"},
     "status_closed": {"uz": "yopildi ✅","ru": "закрыто ✅"},
+
+    # Детали заявки
+    "btn_details":   {"uz": "📋 Tafsilotlar", "ru": "📋 Детали"},
+    "details_title": {
+        "uz": "📋 *Buyurtma №{id} tafsilotlari*\n",
+        "ru": "📋 *Детали заявки №{id}*\n"
+    },
+    "details_dates": {
+        "uz": "📅 Qabul: {start}\n✅ Yopildi: {end}\n⏱ Davomiyligi: {duration}",
+        "ru": "📅 Приём: {start}\n✅ Закрыто: {end}\n⏱ Длительность: {duration}"
+    },
+    "details_works": {"uz": "\n🔧 *Ishlar:*", "ru": "\n🔧 *Работы:*"},
+    "details_parts": {"uz": "\n🔩 *Ehtiyot qismlar:*", "ru": "\n🔩 *Запчасти:*"},
+    "details_total": {"uz": "\n💰 *Jami to'lov: {total} so'm*", "ru": "\n💰 *Итого: {total} сум*"},
 
     # История
     "hist_q": {
@@ -289,11 +321,12 @@ def svc_needs_subs(svc, uid): return svc in T["svc_with_subs"][lg(uid)]
     A_SVC_SUB, A_SVC_PRICE,
     A_WORKS_LIST, A_WORKS_PRICE,
     AFTER_ACCEPT,
-    P_ORDER, P_LINES,
+    P_ORDER, P_NAME, P_SOURCE, P_COST, P_SELL, P_MORE,
     PAY_ORDER, PAY_METHOD, PAY_AMOUNT, PAY_RATE,
     EXP_ORDER, EXP_TYPE, EXP_DESC, EXP_AMOUNT,
     CLOSE_ORDER, HIST_PHONE,
-) = range(22)
+    AS_ORDER, AS_SERVICE, AS_SUB, AS_WORKS_LIST, AS_WORKS_PRICE, AS_PRICE,
+) = range(32)
 
 # ══════════════════════════════════════════════
 # БАЗА ДАННЫХ
@@ -445,15 +478,16 @@ async def notify(ctx, text, uid):
 def kb_main(uid):
     rows = [
         [tr("btn_accept",uid), tr("btn_my",uid)],
-        [tr("btn_part",uid), tr("btn_pay",uid)],
-        [tr("btn_expense",uid), tr("btn_close",uid)],
-        [tr("btn_history",uid), tr("btn_myreport",uid)],
-        ["🌐 Til / Язык"],
+        [tr("btn_part",uid), tr("btn_add_svc",uid)],
+        [tr("btn_pay",uid), tr("btn_expense",uid)],
+        [tr("btn_close",uid), tr("btn_history",uid)],
+        [tr("btn_myreport",uid), "🌐 Til / Язык"],
     ]
     if is_owner(uid):
         rows += [
             [tr("btn_all",uid), tr("btn_report",uid)],
-            [tr("btn_debts",uid), tr("btn_staff",uid)],
+            [tr("btn_kassa",uid), tr("btn_debts",uid)],
+            [tr("btn_staff",uid)],
         ]
     return ReplyKeyboardMarkup([[KeyboardButton(b) for b in r] for r in rows], resize_keyboard=True)
 
@@ -581,28 +615,22 @@ async def accept_car_line(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["car_num"]   = parts[0]
     ctx.user_data["car_model"] = parts[1]
     ctx.user_data["client"]    = parts[2]
-    await update.message.reply_text(tr("accept_phone", uid), parse_mode="Markdown", reply_markup=kb_skip(uid))
+    await update.message.reply_text(tr("accept_phone", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
     return A_PHONE
 
 async def accept_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if is_cancel(update.message.text, uid): return await cancel(update, ctx)
-    if is_skip(update.message.text, uid):
-        ctx.user_data["phone"] = ""
-    else:
-        phone = validate_phone(update.message.text)
-        if not phone:
-            await update.message.reply_text(tr("phone_err", uid), parse_mode="Markdown")
-            return A_PHONE
-        ctx.user_data["phone"] = phone
-
+    phone = validate_phone(update.message.text)
+    if not phone:
+        await update.message.reply_text(tr("phone_err", uid), parse_mode="Markdown")
+        return A_PHONE
+    ctx.user_data["phone"] = phone
     extra = ""
-    ph = ctx.user_data["phone"]
-    if ph:
-        h = client_history(ph)
-        if h:
-            last = h[-1]
-            extra = tr("repeat_client", uid, n=len(h), date=last["date"], svc=last["service"])
+    h = client_history(phone)
+    if h:
+        last = h[-1]
+        extra = tr("repeat_client", uid, n=len(h), date=last["date"], svc=last["service"])
     await update.message.reply_text(tr("accept_problem", uid) + extra, parse_mode="Markdown", reply_markup=kb_cancel(uid))
     return A_PROBLEM
 
@@ -667,7 +695,7 @@ async def accept_svc_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         price = int(update.message.text.replace(" ", "")) * 1000
         sub = ctx.user_data.get("svc_sub", "")
         work_name = f"{ctx.user_data['service']}{' — ' + sub if sub else ''}"
-        ctx.user_data["works"] = [{"name": work_name, "price": price}]
+        ctx.user_data["works"] = [{"name": work_name, "price": price, "master": sname(uid)}]
         return await _save_order(update, ctx)
     except:
         await update.message.reply_text(tr("enter_num", uid)); return A_SVC_PRICE
@@ -680,11 +708,18 @@ async def accept_works_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Bo'sh / Пустой список")
         return A_WORKS_LIST
     ctx.user_data["works_raw"] = works_raw
-    ctx.user_data["works"] = []
-    ctx.user_data["work_idx"] = 0
-    # Спрашиваем цену первой работы
+
+    # Показываем список работ и просим цены одним сообщением
+    example_prices = "\n".join(["100", "500", "1000"][:len(works_raw)])
+    works_str = f"{len(works_raw)} ta / шт."
+    hint = tr("svc_works_prices_hint", uid,
+              works=works_str,
+              example=example_prices)
+
+    # Показываем список работ что ввёл
+    works_list = "\n".join(f"{i+1}. {w}" for i, w in enumerate(works_raw))
     await update.message.reply_text(
-        tr("svc_work_price", uid, work=works_raw[0]),
+        f"✅ *Ishlar / Работы:*\n{works_list}\n\n{hint}",
         parse_mode="Markdown", reply_markup=kb_cancel(uid)
     )
     return A_WORKS_PRICE
@@ -692,25 +727,31 @@ async def accept_works_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def accept_work_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if is_cancel(update.message.text, uid): return await cancel(update, ctx)
-    try:
-        price = int(update.message.text.replace(" ", "")) * 1000
-        idx = ctx.user_data["work_idx"]
-        works_raw = ctx.user_data["works_raw"]
-        ctx.user_data["works"].append({"name": works_raw[idx], "price": price})
-        ctx.user_data["work_idx"] = idx + 1
+    works_raw = ctx.user_data["works_raw"]
 
-        if idx + 1 < len(works_raw):
-            # Следующая работа
-            await update.message.reply_text(
-                tr("svc_work_price", uid, work=works_raw[idx + 1]),
-                parse_mode="Markdown", reply_markup=kb_cancel(uid)
-            )
-            return A_WORKS_PRICE
-        else:
-            # Все работы готовы
-            return await _save_order(update, ctx)
+    # Парсим все цены из сообщения
+    price_lines = [l.strip() for l in update.message.text.strip().split("\n") if l.strip()]
+
+    if len(price_lines) != len(works_raw):
+        await update.message.reply_text(
+            tr("svc_works_mismatch", uid, n_prices=len(price_lines), n_works=len(works_raw)),
+            parse_mode="Markdown"
+        )
+        return A_WORKS_PRICE
+
+    try:
+        works = []
+        for i, (work_name, price_str) in enumerate(zip(works_raw, price_lines)):
+            price = int(price_str.replace(" ", "")) * 1000
+            works.append({"name": work_name, "price": price})
+        ctx.user_data["works"] = works
+        return await _save_order(update, ctx)
     except:
-        await update.message.reply_text(tr("enter_num", uid)); return A_WORKS_PRICE
+        await update.message.reply_text(
+            f"❌ Narxlarda xato! / Ошибка в ценах!\n📌 Faqat raqam / Только цифры:\n`100`\n`500`",
+            parse_mode="Markdown"
+        )
+        return A_WORKS_PRICE
 
 async def _save_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -759,8 +800,8 @@ async def after_accept(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if oid:
             ctx.user_data.clear()
             ctx.user_data["order_id"] = oid
-            await update.message.reply_text(tr("part_hint", uid), parse_mode="Markdown", reply_markup=kb_done_cancel(uid))
-            return P_LINES
+            await update.message.reply_text(tr("part_name_q", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
+            return P_NAME
     await update.message.reply_text("✅", reply_markup=kb_main(uid))
     return ConversationHandler.END
 
@@ -770,7 +811,8 @@ async def after_accept(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def part_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not is_staff(uid): return ConversationHandler.END
-    orders = my_open(uid) if not is_owner(uid) else open_orders()
+    # Все видят все открытые машины — чтобы мойщик/тонировщик мог добавить запчасть
+    orders = open_orders()
     if not orders:
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return ConversationHandler.END
@@ -812,14 +854,16 @@ async def part_lines(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         tokens = line.rsplit(None, 2)
         if len(tokens) == 3:
             try:
+                # Мы купили: название себестоимость цена (оба числа * 1000)
                 added.append({"name": tokens[0], "source": tr("src_bought", uid),
-                              "cost_price": int(tokens[1].replace(" ","")),
-                              "sell_price": int(tokens[2].replace(" ",""))})
+                              "cost_price": int(tokens[1].replace(" ","")) * 1000,
+                              "sell_price": int(tokens[2].replace(" ","")) * 1000})
             except: errors.append(line)
         elif len(tokens) == 2:
             try:
+                # Клиент привёз или со склада: название цена (* 1000)
                 added.append({"name": tokens[0], "source": tr("src_client", uid),
-                              "cost_price": 0, "sell_price": int(tokens[1].replace(" ",""))})
+                              "cost_price": 0, "sell_price": int(tokens[1].replace(" ","")) * 1000})
             except: errors.append(line)
         else:
             errors.append(line)
@@ -903,11 +947,13 @@ async def pay_amount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if is_cancel(update.message.text, uid): return await cancel(update, ctx)
     try:
-        amount = int(update.message.text.replace(" ", ""))
+        raw = int(update.message.text.replace(" ", ""))
         method = ctx.user_data["pay_method"]
         rate = ctx.user_data.get("usd_rate", 1)
         is_usd = "USD" in method
         is_debt = "Qarz" in method or "Долг" in method
+        # USD вводится в долларах без умножения, остальное в тысячах
+        amount = raw if is_usd else raw * 1000
         amt_uzs = amount * rate if is_usd else amount
 
         oid = ctx.user_data["order_id"]
@@ -942,7 +988,8 @@ async def pay_amount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def exp_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not is_staff(uid): return ConversationHandler.END
-    orders = my_open(uid) if not is_owner(uid) else open_orders()
+    # Все видят все открытые машины для расходов
+    orders = open_orders()
     if not orders:
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return ConversationHandler.END
@@ -985,10 +1032,10 @@ async def exp_amount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if is_cancel(update.message.text, uid): return await cancel(update, ctx)
     try:
-        amount = int(update.message.text.replace(" ", ""))
+        amount = int(update.message.text.replace(" ", "")) * 1000
         oid = ctx.user_data["order_id"]
         exp = {"type": ctx.user_data["exp_type"], "desc": ctx.user_data["exp_desc"],
-               "amount": amount, "time": now_t(), "by": sname(uid)}
+               "amount": amount, "time": now_t(), "by": sname(uid), "by_id": uid}
         o = get_order(oid)
         upd_order(oid, {"expenses": o.get("expenses", []) + [exp]})
         msg = tr("exp_done", uid, id=oid, type=exp["type"], amt=fmt(amount))
@@ -1031,7 +1078,7 @@ async def close_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(tr("close_no_pay", uid), parse_mode="Markdown", reply_markup=kb_main(uid))
             return ConversationHandler.END
 
-        upd_order(oid, {"status": "closed", "closed_time": now_t(), "closed_by": sname(uid)})
+        upd_order(oid, {"status": "closed", "closed_time": now_t(), "closed_date": today_d(), "closed_by": sname(uid)})
         o = get_order(oid)
 
         paid = calc_paid(o)
@@ -1048,7 +1095,12 @@ async def close_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         msg = tr("close_done", uid, id=oid, car=o["car"], client=o["client"],
                  phone=phone, debt=debt_line, summary=summary)
+        # Инлайн кнопка "Детали"
+        inline_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton(tr("btn_details", uid), callback_data=f"details_{oid}_{uid}")
+        ]])
         await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=kb_main(uid))
+        await update.message.reply_text("👇", reply_markup=inline_kb)
         await notify(ctx, f"🏁 №{oid} yopildi | {o['car']} | {o['client']} | {sname(uid)}", uid)
         return ConversationHandler.END
     except Exception as e:
@@ -1277,6 +1329,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif text in [T["btn_report"]["uz"], T["btn_report"]["ru"]]:await cmd_report(update, ctx)
     elif text in [T["btn_debts"]["uz"], T["btn_debts"]["ru"]]: await cmd_debts(update, ctx)
     elif text in [T["btn_staff"]["uz"], T["btn_staff"]["ru"]]: await cmd_staff(update, ctx)
+    elif text in [T["btn_kassa"]["uz"], T["btn_kassa"]["ru"]]: await cmd_kassa(update, ctx)
     elif text in [T["btn_myreport"]["uz"], T["btn_myreport"]["ru"]]: await cmd_myreport(update, ctx)
 
 async def cmd_del_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1376,6 +1429,307 @@ async def cmd_edit_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════
+# ДОБАВИТЬ УСЛУГУ К СУЩЕСТВУЮЩЕЙ ЗАЯВКЕ
+# ══════════════════════════════════════════════
+async def add_svc_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_staff(uid): return ConversationHandler.END
+    orders = open_orders()
+    if not orders:
+        await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
+        return ConversationHandler.END
+    ctx.user_data.clear()
+    orders_text = "\n".join(order_short(o, uid) for o in orders)
+    await update.message.reply_text(
+        tr("add_svc_order", uid, orders=orders_text),
+        parse_mode="Markdown", reply_markup=kb_cancel(uid)
+    )
+    return AS_ORDER
+
+async def add_svc_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_cancel(update.message.text, uid): return await cancel(update, ctx)
+    try:
+        oid = int(update.message.text.strip())
+        o = get_order(oid)
+        if not o or o["status"] == "closed":
+            await update.message.reply_text(tr("not_found", uid)); return AS_ORDER
+        ctx.user_data["order_id"] = oid
+        ctx.user_data["add_svc_works"] = []
+        ctx.user_data["add_svc_work_idx"] = 0
+        await update.message.reply_text(
+            f"🚗 *{o['car']}* | {o['client']}\n\n" + tr("accept_service", uid),
+            parse_mode="Markdown",
+            reply_markup=kb_list(get_services(uid), uid, cols=2)
+        )
+        return AS_SERVICE
+    except:
+        await update.message.reply_text(tr("enter_num", uid)); return AS_ORDER
+
+async def add_svc_service(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_cancel(update.message.text, uid): return await cancel(update, ctx)
+    svc = update.message.text
+    ctx.user_data["add_svc_name"] = svc
+    ctx.user_data["add_svc_master"] = sname(uid)
+
+    # Услуги с подвидами
+    if svc_needs_subs(svc, uid):
+        if "Yuvish" in svc or "Мойка" in svc:
+            subs = get_wash_subs(uid)
+        elif "Tonirovka" in svc or "Тонировка" in svc:
+            subs = get_tint_subs(uid)
+        else:
+            subs = get_film_subs(uid)
+        await update.message.reply_text(f"📋 {svc}\n\nVid / Вид:", reply_markup=kb_list(subs, uid, cols=1))
+        return AS_SUB
+
+    # Услуги со списком работ
+    if svc_needs_works(svc, uid):
+        await update.message.reply_text(tr("svc_works_hint", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
+        return AS_WORKS_LIST
+
+    # Простая — одна цена
+    await update.message.reply_text(tr("svc_sub_price", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
+    return AS_PRICE
+
+async def add_svc_sub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_cancel(update.message.text, uid): return await cancel(update, ctx)
+    ctx.user_data["add_svc_sub"] = update.message.text
+    ctx.user_data["add_svc_name"] = f"{ctx.user_data['add_svc_name']} — {update.message.text}"
+    await update.message.reply_text(tr("svc_sub_price", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
+    return AS_PRICE
+
+async def add_svc_works_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_cancel(update.message.text, uid): return await cancel(update, ctx)
+    works_raw = [l.strip() for l in update.message.text.strip().split("\n") if l.strip()]
+    if not works_raw:
+        await update.message.reply_text("❌"); return AS_WORKS_LIST
+    ctx.user_data["add_svc_works_raw"] = works_raw
+    example = "\n".join(["100","500","1000"][:len(works_raw)])
+    works_list = "\n".join(f"{i+1}. {w}" for i,w in enumerate(works_raw))
+    await update.message.reply_text(
+        f"✅ *Ishlar:*\n{works_list}\n\n" + tr("svc_works_prices_hint", uid, works=f"{len(works_raw)} ta", example=example),
+        parse_mode="Markdown", reply_markup=kb_cancel(uid)
+    )
+    return AS_WORKS_PRICE
+
+async def add_svc_works_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_cancel(update.message.text, uid): return await cancel(update, ctx)
+    works_raw = ctx.user_data["add_svc_works_raw"]
+    price_lines = [l.strip() for l in update.message.text.strip().split("\n") if l.strip()]
+    if len(price_lines) != len(works_raw):
+        await update.message.reply_text(tr("svc_works_mismatch", uid, n_prices=len(price_lines), n_works=len(works_raw)), parse_mode="Markdown")
+        return AS_WORKS_PRICE
+    try:
+        works = [{"name": w, "price": int(p.replace(" ","")) * 1000, "master": sname(uid)}
+                 for w, p in zip(works_raw, price_lines)]
+        return await _save_add_svc(update, ctx, works=works)
+    except:
+        await update.message.reply_text(tr("enter_num", uid)); return AS_WORKS_PRICE
+
+async def add_svc_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_cancel(update.message.text, uid): return await cancel(update, ctx)
+    try:
+        price = int(update.message.text.replace(" ", "")) * 1000
+        work = {"name": ctx.user_data["add_svc_name"], "price": price, "master": sname(uid)}
+        return await _save_add_svc(update, ctx, works=[work])
+    except:
+        await update.message.reply_text(tr("enter_num", uid)); return AS_PRICE
+
+async def _save_add_svc(update, ctx, works):
+    uid = update.effective_user.id
+    oid = ctx.user_data["order_id"]
+    o = get_order(oid)
+    existing_works = o.get("works", [])
+    existing_works.extend(works)
+    upd_order(oid, {"works": existing_works})
+
+    total = sum(w["price"] for w in works)
+    svc_name = works[0]["name"] if len(works) == 1 else f"{len(works)} ta ish"
+    msg = tr("add_svc_done", uid, id=oid, svc=svc_name, master=sname(uid), total=fmt(total))
+    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=kb_main(uid))
+    await notify(ctx, msg, uid)
+    return ConversationHandler.END
+
+
+async def cmd_kassa(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_staff(uid): return
+
+    if not is_owner(uid):
+        # ── КАССА МАСТЕРА — только его работы ──
+        name = sname(uid)
+        all_orders = load()["orders"]
+        today = today_d()
+
+        # Работы мастера за сегодня
+        my_works = []
+        for o in all_orders:
+            for w in o.get("works", []):
+                if w.get("master") == name and o["date"] == today:
+                    my_works.append((o, w))
+
+        if not my_works:
+            await update.message.reply_text(tr("kassa_my_none", uid), reply_markup=kb_main(uid)); return
+
+        works_total = sum(w["price"] for _, w in my_works)
+        works_lines = "\n".join(f"  • №{o['id']} {o['car']} | {w['name']} — {fmt(w['price'])} сум"
+                                  for o, w in my_works)
+
+        # Расходы мастера за сегодня
+        my_expenses = []
+        for o in all_orders:
+            for e in o.get("expenses", []):
+                if e.get("by_id") == uid and e.get("time", "")[:10] == today or o["date"] == today:
+                    if e.get("by_id") == uid:
+                        my_expenses.append((o, e))
+
+        exp_total = sum(e["amount"] for _, e in my_expenses)
+        exp_lines = "\n".join(f"  • №{o['id']} | {e['type']}: {e.get('desc','')} — {fmt(e['amount'])} сум"
+                                for o, e in my_expenses) if my_expenses else ""
+
+        net = works_total - exp_total
+
+        lines = [tr("kassa_my_title", uid, name=name)]
+        lines.append(tr("kassa_my_works", uid, lines=works_lines, total=fmt(works_total)))
+        if my_expenses:
+            lines.append(tr("kassa_my_exp", uid, total=fmt(exp_total), lines=exp_lines))
+        lines.append(tr("kassa_my_net", uid, v=fmt(net)))
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_main(uid))
+        return
+
+    # ── КАССА ВЛАДЕЛЬЦА — полная картина ──
+    orders = today_orders()
+    if not orders:
+        await update.message.reply_text(tr("kassa_none", uid), reply_markup=kb_main(uid)); return
+
+    cash_uzs = cash_usd_amt = cash_usd_uzs = card = bank = debt = 0
+
+    for o in orders:
+        for p in o.get("payments", []):
+            if p.get("is_debt") and not p.get("paid"):
+                debt += p["amt_uzs"]; continue
+            m = p["method"]
+            if "UZS" in m:            cash_uzs += p["amt_uzs"]
+            elif "USD" in m:          cash_usd_amt += p.get("amount",0); cash_usd_uzs += p["amt_uzs"]
+            elif "Karta" in m or "Карта" in m:   card += p["amt_uzs"]
+            elif "O'tkazma" in m or "Перечисл" in m: bank += p["amt_uzs"]
+
+    total = cash_uzs + cash_usd_uzs + card + bank
+
+    # Расходы по сотрудникам
+    exp_by_staff = {}  # name -> [(order, expense)]
+    total_exp = 0
+    for o in orders:
+        for e in o.get("expenses", []):
+            by = e.get("by", "—")
+            exp_by_staff.setdefault(by, []).append((o, e))
+            total_exp += e["amount"]
+
+    net = total - total_exp
+
+    lines = [tr("kassa_title", uid, date=today_d())]
+    if cash_uzs > 0:    lines.append(tr("kassa_cash", uid, v=fmt(cash_uzs)))
+    if cash_usd_amt > 0:lines.append(tr("kassa_usd",  uid, usd=cash_usd_amt, v=fmt(cash_usd_uzs)))
+    if card > 0:         lines.append(tr("kassa_card", uid, v=fmt(card)))
+    if bank > 0:         lines.append(tr("kassa_bank", uid, v=fmt(bank)))
+    if debt > 0:         lines.append(tr("kassa_debt", uid, v=fmt(debt)))
+    lines.append(tr("kassa_total", uid, v=fmt(total)))
+
+    # Расходы детально по сотрудникам
+    if exp_by_staff:
+        lines.append(tr("kassa_exp_detail", uid))
+        for staff_name_key, exps in exp_by_staff.items():
+            staff_total = sum(e["amount"] for _, e in exps)
+            lines.append(f"  👤 *{staff_name_key}* — {fmt(staff_total)} сум")
+            for o, e in exps:
+                lines.append(f"    • №{o['id']} | {e['type']}: {e.get('desc','')} — {fmt(e['amount'])} сум")
+        lines.append(tr("kassa_exp", uid, v=fmt(total_exp)))
+
+    lines.append(tr("kassa_net", uid, v=fmt(net)))
+
+    # Открытые долги
+    open_debts = []
+    for o in load()["orders"]:
+        if o["status"] != "closed":
+            amt = sum(p["amt_uzs"] for p in o.get("payments",[]) if p.get("is_debt") and not p.get("paid"))
+            if amt > 0: open_debts.append((o, amt))
+    if open_debts:
+        lines.append(f"\n⚠️ *Ochiq qarzlar / Открытые долги:*")
+        for o, amt in open_debts:
+            lines.append(f"  №{o['id']} | {o['car']} | {o['client']} — {fmt(amt)} сум")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_main(uid))
+
+
+async def callback_details(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки Детали"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data  # details_OID_UID
+    parts_data = data.split("_")
+    if len(parts_data) < 3: return
+    oid = int(parts_data[1])
+    caller_uid = int(parts_data[2])
+    uid = query.from_user.id
+    o = get_order(oid)
+    if not o:
+        await query.message.reply_text("❌ Buyurtma topilmadi / Заявка не найдена"); return
+
+    # Длительность
+    try:
+        start_dt = datetime.strptime(f"{o['date']} {o['time']}", "%Y-%m-%d %H:%M")
+        end_time = o.get("closed_time", now_t())
+        end_date = o.get("closed_date", o["date"])
+        end_dt = datetime.strptime(f"{end_date} {end_time}", "%Y-%m-%d %H:%M")
+        diff = end_dt - start_dt
+        hours = int(diff.total_seconds() // 3600)
+        mins = int((diff.total_seconds() % 3600) // 60)
+        duration = f"{hours}h {mins}min" if hours > 0 else f"{mins} min"
+        start_str = f"{o['date']} {o['time']}"
+        end_str = f"{end_date} {end_time}"
+    except:
+        duration = "—"
+        start_str = f"{o['date']} {o['time']}"
+        end_str = o.get("closed_time", "—")
+
+    lines = [tr("details_title", uid, id=oid)]
+    lines.append(f"🚗 {o['car']} | 👤 {o['client']} | 📱 {o.get('phone','-')}")
+    lines.append(tr("details_dates", uid, start=start_str, end=end_str, duration=duration))
+
+    # Работы
+    if o.get("works"):
+        lines.append(tr("details_works", uid))
+        works_total = 0
+        for w in o["works"]:
+            master_line = f" | 👤 {w['master']}" if w.get("master") else ""
+            lines.append(f"  • {w['name']} — {fmt(w['price'])} сум{master_line}")
+            works_total += w["price"]
+        lines.append(f"  Jami / Итого: {fmt(works_total)} сум")
+
+    # Запчасти (продажные цены — для всех, себестоимость только владельцу)
+    if o.get("parts"):
+        lines.append(tr("details_parts", uid))
+        for p in o["parts"]:
+            line = f"  • {p['name']} [{p['source']}] — {fmt(p['sell_price'])} сум"
+            if is_owner(uid) and p.get("cost_price", 0) > 0:
+                margin = p["sell_price"] - p["cost_price"]
+                line += f" _(📈 {fmt(margin)})_"
+            lines.append(line)
+
+    # Итого
+    total = calc_total(o)
+    lines.append(tr("details_total", uid, total=fmt(total)))
+
+    await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+# ══════════════════════════════════════════════
 # ЗАПУСК
 # ══════════════════════════════════════════════
 def main():
@@ -1407,13 +1761,30 @@ def main():
         A_WORKS_LIST: [MessageHandler(filters.TEXT & ~filters.COMMAND, accept_works_list)],
         A_WORKS_PRICE:[MessageHandler(filters.TEXT & ~filters.COMMAND, accept_work_price)],
         AFTER_ACCEPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, after_accept)],
-        P_LINES:      [MessageHandler(filters.TEXT & ~filters.COMMAND, part_lines)],
+        P_NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, part_name)],
+        P_SOURCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, part_source)],
+        P_COST:   [MessageHandler(filters.TEXT & ~filters.COMMAND, part_cost)],
+        P_SELL:   [MessageHandler(filters.TEXT & ~filters.COMMAND, part_sell)],
+        P_MORE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, part_more)],
     }, accept_start))
 
     app.add_handler(conv(btns("btn_part"), {
-        P_ORDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, part_order)],
-        P_LINES: [MessageHandler(filters.TEXT & ~filters.COMMAND, part_lines)],
+        P_ORDER:  [MessageHandler(filters.TEXT & ~filters.COMMAND, part_order)],
+        P_NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, part_name)],
+        P_SOURCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, part_source)],
+        P_COST:   [MessageHandler(filters.TEXT & ~filters.COMMAND, part_cost)],
+        P_SELL:   [MessageHandler(filters.TEXT & ~filters.COMMAND, part_sell)],
+        P_MORE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, part_more)],
     }, part_start))
+
+    app.add_handler(conv(btns("btn_add_svc"), {
+        AS_ORDER:       [MessageHandler(filters.TEXT & ~filters.COMMAND, add_svc_order)],
+        AS_SERVICE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, add_svc_service)],
+        AS_SUB:         [MessageHandler(filters.TEXT & ~filters.COMMAND, add_svc_sub)],
+        AS_WORKS_LIST:  [MessageHandler(filters.TEXT & ~filters.COMMAND, add_svc_works_list)],
+        AS_WORKS_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_svc_works_price)],
+        AS_PRICE:       [MessageHandler(filters.TEXT & ~filters.COMMAND, add_svc_price)],
+    }, add_svc_start))
 
     app.add_handler(conv(btns("btn_pay"), {
         PAY_ORDER:  [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_order)],
@@ -1453,6 +1824,10 @@ def main():
     my_btns      = [T["btn_my"]["uz"],       T["btn_my"]["ru"]]
     myreport_btns= [T["btn_myreport"]["uz"], T["btn_myreport"]["ru"]]
 
+    kassa_btns   = [T["btn_kassa"]["uz"],   T["btn_kassa"]["ru"]]
+    add_svc_btns = [T["btn_add_svc"]["uz"], T["btn_add_svc"]["ru"]]
+    app.add_handler(MessageHandler(filters.Regex(safe_pattern(kassa_btns)),   cmd_kassa),  group=0)
+    app.add_handler(MessageHandler(filters.Regex(safe_pattern(add_svc_btns)), add_svc_start), group=0)
     app.add_handler(MessageHandler(filters.Regex(safe_pattern(staff_btns)),    cmd_staff),    group=0)
     app.add_handler(MessageHandler(filters.Regex(safe_pattern(report_btns)),   cmd_report),   group=0)
     app.add_handler(MessageHandler(filters.Regex(safe_pattern(debts_btns)),    cmd_debts),    group=0)
@@ -1460,6 +1835,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(safe_pattern(my_btns)),       cmd_my_orders),group=0)
     app.add_handler(MessageHandler(filters.Regex(safe_pattern(myreport_btns)), cmd_myreport), group=0)
 
+    app.add_handler(CallbackQueryHandler(callback_details, pattern="^details_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
     print("✅ Avtoservis Bot v2.1 ishga tushdi!")
