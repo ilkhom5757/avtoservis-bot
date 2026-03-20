@@ -175,6 +175,31 @@ T = {
     },
 
     # Запчасти
+    "part_name_q": {
+        "uz": "🔩 *Ehtiyot qism nomi:*\n📌 Misol: `Sharovoy chap`",
+        "ru": "🔩 *Название запчасти:*\n📌 Пример: `Шаровой левый`"
+    },
+    "part_source_q": {
+        "uz": "*{name}*\n\nManba / Откуда:",
+        "ru": "*{name}*\n\nИсточник:"
+    },
+    "part_cost_q": {
+        "uz": "💸 *Tannarxi (ming so\'mda):*\n📌 Misol: `350` = 350 000 so\'m",
+        "ru": "💸 *Себестоимость (в тысячах):*\n📌 Пример: `350` = 350 000 сум"
+    },
+    "part_sell_q": {
+        "uz": "💰 *Mijoz narxi (ming so\'mda):*\n📌 Misol: `420` = 420 000 so\'m",
+        "ru": "💰 *Цена клиенту (в тысячах):*\n📌 Пример: `420` = 420 000 сум"
+    },
+    "part_work_q": {
+        "uz": "💰 *Ish narxi (ming so\'mda):*\n_(Mijoz o\'z zapchastini olib keldi)_\n📌 Misol: `50` = 50 000 so\'m",
+        "ru": "💰 *Цена работы (в тысячах):*\n_(Клиент привёз свою запчасть)_\n📌 Пример: `50` = 50 000 сум"
+    },
+    "part_added": {
+        "uz": "✅ *{name}* qo\'shildi\n💰 {sell} so\'m\n\nYana ehtiyot qism?",
+        "ru": "✅ *{name}* добавлена\n💰 {sell} сум\n\nЕщё запчасть?"
+    },
+    "src_stock":     {"uz": "📦 Ombordan", "ru": "📦 Со склада"},
     "part_hint": {
         "uz": ("🔩 *Ehtiyot qism*\n\nHar bir qatorga (ming so'mda):\n"
                "`nomi tannarxi mijoznarxi`\n\n"
@@ -353,12 +378,12 @@ def db_run(sql, params=None, fetch=False):
     """Выполнить запрос и вернуть результаты"""
     import re as _re
     # Convert $1,$2 style to %s for pg8000 cursor
-    pg_sql = _re.sub(r'\$\d+', '%s', sql)
+    pg_sql = _re.sub(r'[$][0-9]+', '%s', sql)
     conn = get_conn()
     try:
         cur = conn.cursor()
         if params is not None and len(params) > 0:
-            cur.execute(pg_sql, params)
+            cur.execute(pg_sql, list(params))
         else:
             cur.execute(pg_sql)
         if fetch:
@@ -368,6 +393,7 @@ def db_run(sql, params=None, fetch=False):
         conn.commit()
         return []
     except Exception as e:
+        logger.error(f"db_run error: {e} | SQL: {pg_sql[:100]} | params: {params}")
         conn.rollback()
         raise
     finally:
@@ -1014,7 +1040,8 @@ async def part_cost(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data["part_cost"] = int(update.message.text.replace(" ", "")) * 1000
         await update.message.reply_text(tr("part_sell_q", uid), parse_mode="Markdown", reply_markup=kb_cancel(uid))
         return P_SELL
-    except:
+    except Exception as e:
+        logger.error(f"part_cost error: {e}")
         await update.message.reply_text(tr("enter_num", uid)); return P_COST
 
 async def part_sell(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1044,7 +1071,8 @@ async def part_sell(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ], resize_keyboard=True)
         )
         return P_MORE
-    except:
+    except Exception as e:
+        logger.error(f"part_sell error: {e}")
         await update.message.reply_text(tr("enter_num", uid)); return P_SELL
 
 async def part_more(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
