@@ -433,7 +433,7 @@ def add_order(o):
         INSERT INTO orders
         (id, date, time, car, car_num, client, phone, problem, master,
          service, works, parts, payments, expenses, status, created_by)
-        VALUES (:1,:2,:3,:4,:5,:6,:7,:8,:9,:10,:11,:12,:13,:14,:15,:16)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
     """, [
         o["id"], o["date"], o["time"], o["car"], o.get("car_num",""),
         o["client"], o.get("phone",""), o["problem"], o["master"],
@@ -474,12 +474,12 @@ def upd_order(oid, u):
     vals = []
     i = 1
     for k, v in u.items():
-        sets.append(f"{k} = :{i}")
+        sets.append(f"{k} = ${i}")
         vals.append(json.dumps(v) if isinstance(v, (list, dict)) else v)
         i += 1
     if not sets: return
     vals.append(oid)
-    db_run(f"UPDATE orders SET {', '.join(sets)} WHERE id=:{i}", vals)
+    db_run(f"UPDATE orders SET {', '.join(sets)} WHERE id=${i}", vals)
 
 def open_orders():
     rows = db_run("SELECT * FROM orders WHERE status != 'closed' ORDER BY id", fetch=True)
@@ -1473,8 +1473,7 @@ async def cmd_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not is_owner(uid): return
     lg_uid = lg(uid)
-    d = load()
-    staff_phones = d.get("staff_phones", {})
+    staff_phones = {}
 
     lines = ["👥 *Xodimlar / Сотрудники*\n"]
     for i, (sid, name) in enumerate(STAFF.items(), 1):
@@ -1586,13 +1585,11 @@ async def cmd_edit_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if sid not in STAFF:
             await update.message.reply_text("❌ Xodim topilmadi / Сотрудник не найден"); return
 
-        d = load()
         old_name = STAFF[sid]
 
         if field == "name":
             STAFF[sid] = value
-            d.setdefault("staff", {})[str(sid)] = value
-            save(d)
+            _save_staff()
             await update.message.reply_text(
                 f"✅ Ism o\'zgartirildi / Имя изменено:\n*{old_name}* → *{value}*",
                 parse_mode="Markdown", reply_markup=kb_main(uid)
