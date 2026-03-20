@@ -1261,6 +1261,22 @@ def main():
     app.add_handler(CommandHandler("add_staff", cmd_add_staff))
     app.add_handler(CommandHandler("debt", cmd_close_debt))
     app.add_handler(CommandHandler("qarz", cmd_close_debt))
+
+    # Кнопки меню с высоким приоритетом — обоих языков
+    staff_btns   = [T["btn_staff"]["uz"],    T["btn_staff"]["ru"]]
+    report_btns  = [T["btn_report"]["uz"],   T["btn_report"]["ru"]]
+    debts_btns   = [T["btn_debts"]["uz"],    T["btn_debts"]["ru"]]
+    all_btns     = [T["btn_all"]["uz"],      T["btn_all"]["ru"]]
+    my_btns      = [T["btn_my"]["uz"],       T["btn_my"]["ru"]]
+    myreport_btns= [T["btn_myreport"]["uz"], T["btn_myreport"]["ru"]]
+
+    app.add_handler(MessageHandler(filters.Regex(safe_pattern(staff_btns)),    cmd_staff),    group=0)
+    app.add_handler(MessageHandler(filters.Regex(safe_pattern(report_btns)),   cmd_report),   group=0)
+    app.add_handler(MessageHandler(filters.Regex(safe_pattern(debts_btns)),    cmd_debts),    group=0)
+    app.add_handler(MessageHandler(filters.Regex(safe_pattern(all_btns)),      cmd_all_orders),group=0)
+    app.add_handler(MessageHandler(filters.Regex(safe_pattern(my_btns)),       cmd_my_orders),group=0)
+    app.add_handler(MessageHandler(filters.Regex(safe_pattern(myreport_btns)), cmd_myreport), group=0)
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
     print("✅ Avtoservis Bot v2.1 ishga tushdi!")
