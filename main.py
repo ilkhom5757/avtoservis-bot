@@ -1117,9 +1117,9 @@ def main():
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("lang", cmd_lang))
-    app.add_handler(CommandHandler("добавить", add_staff_cmd))
+    app.add_handler(CommandHandler("add_staff", add_staff_cmd))
     app.add_handler(CommandHandler("qoshish", add_staff_cmd))
-    app.add_handler(CommandHandler("долг", cmd_close_debt))
+    app.add_handler(CommandHandler("debt", cmd_close_debt))
     app.add_handler(CommandHandler("qarz", cmd_close_debt))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
