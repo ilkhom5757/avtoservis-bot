@@ -1,2 +1,2 @@
 [deploy]
-startCommand = "python avtoservis_v1.py"
+startCommand = "python main.py"
