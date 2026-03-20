@@ -17,6 +17,15 @@ logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=lo
 logger = logging.getLogger(__name__)
 
 STAFF: dict = {OWNER_ID: "Rahbar 👑"}
+# Роли: {uid: role} — "owner", "mechanic", "wash", "tint", "body", "elec"
+ROLES: dict = {OWNER_ID: "owner"}
+
+ROLE_NAMES = {
+    "uz": {"owner": "Rahbar 👑", "mechanic": "Mexanik 🔧", "wash": "Yuvuvchi 🚿",
+           "tint": "Tonirovkachi 🪟", "body": "Kuzovchi 🔨", "elec": "Elektrik ⚡"},
+    "ru": {"owner": "Руководитель 👑", "mechanic": "Механик 🔧", "wash": "Мойщик 🚿",
+           "tint": "Тонировщик 🪟", "body": "Кузовщик 🔨", "elec": "Электрик ⚡"}
+}
 USER_LANG: dict = {}
 
 # ══════════════════════════════════════════════
@@ -300,8 +309,13 @@ def save(d):
         json.dump(d, f, ensure_ascii=False, indent=2)
 
 def load_langs():
-    for k, v in load().get("langs", {}).items():
+    d = load()
+    for k, v in d.get("langs", {}).items():
         USER_LANG[int(k)] = v
+    for k, v in d.get("staff", {}).items():
+        STAFF[int(k)] = v
+    for k, v in d.get("roles", {}).items():
+        ROLES[int(k)] = v
 
 def save_lang(uid, l):
     USER_LANG[uid] = l
@@ -366,7 +380,7 @@ def calc_expenses(o):
 # ══════════════════════════════════════════════
 # УТИЛИТЫ
 # ══════════════════════════════════════════════
-def is_owner(uid): return uid == OWNER_ID
+def is_owner(uid): return ROLES.get(uid) == "owner" or uid == OWNER_ID
 def is_staff(uid): return uid in STAFF or uid == OWNER_ID
 def sname(uid): return STAFF.get(uid, f"ID:{uid}")
 def fmt(n):
@@ -434,6 +448,7 @@ def kb_main(uid):
         [tr("btn_part",uid), tr("btn_pay",uid)],
         [tr("btn_expense",uid), tr("btn_close",uid)],
         [tr("btn_history",uid), tr("btn_myreport",uid)],
+        ["🌐 Til / Язык"],
     ]
     if is_owner(uid):
         rows += [
@@ -490,18 +505,61 @@ async def cmd_lang(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(tr("choose_lang", uid), reply_markup=kb_lang())
 
 async def cmd_add_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_owner(update.effective_user.id): return
+    uid = update.effective_user.id
+    if not is_owner(uid): return
     args = ctx.args
+
+    if not args:
+        instr = (
+            "👥 *Xodim qo'shish / Добавить сотрудника*\n\n"
+            "Format: `/add_staff ID Ism rol`\n\n"
+            "*Rollar / Роли:*\n"
+            "  `owner` — Rahbar 👑\n"
+            "  `mechanic` — Mexanik 🔧 _(standart)_\n"
+            "  `wash` — Yuvuvchi 🚿\n"
+            "  `tint` — Tonirovkachi 🪟\n"
+            "  `body` — Kuzovchi 🔨\n"
+            "  `elec` — Elektrik ⚡\n\n"
+            "*Misollar / Примеры:*\n"
+            "`/add_staff 123456789 Abduraxmon`\n"
+            "`/add_staff 123456789 Abduraxmon mechanic`\n"
+            "`/add_staff 123456789 Sarvarbek owner`\n"
+            "`/add_staff 123456789 Sanjarbek wash`\n\n"
+            "💡 ID ni bilish uchun xodim @userinfobot ga yozsin\n"
+            "_(Чтобы узнать ID — пусть напишет @userinfobot)_"
+        )
+        await update.message.reply_text(instr, parse_mode="Markdown"); return
+
     if len(args) < 2:
-        await update.message.reply_text("Format: /add_staff 123456789 Abduraxmon"); return
+        await update.message.reply_text("Format: `/add_staff 123456789 Ism`\nBatafsil: /add_staff", parse_mode="Markdown"); return
+
     try:
-        sid = int(args[0]); sn = " ".join(args[1:])
+        sid = int(args[0])
+        # Определяем роль — последний аргумент если это роль
+        valid_roles = ["owner","mechanic","wash","tint","body","elec"]
+        if len(args) >= 3 and args[-1].lower() in valid_roles:
+            role = args[-1].lower()
+            sn = " ".join(args[1:-1])
+        else:
+            role = "mechanic"
+            sn = " ".join(args[1:])
+
         STAFF[sid] = sn
-        # Сохраняем в data.json
-        d = load(); d.setdefault("staff", {})[str(sid)] = sn; save(d)
-        await update.message.reply_text(f"✅ {sn} qo'shildi / добавлен!")
-    except:
-        await update.message.reply_text("❌ /add_staff 123456789 Ism")
+        ROLES[sid] = role
+        lg_uid = lg(uid)
+        role_label = ROLE_NAMES[lg_uid].get(role, role)
+
+        d = load()
+        d.setdefault("staff", {})[str(sid)] = sn
+        d.setdefault("roles", {})[str(sid)] = role
+        save(d)
+
+        await update.message.reply_text(
+            f"✅ *{sn}* qo'shildi!\n👤 Rol: {role_label}\n🆔 ID: `{sid}`",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xato: {e}\nFormat: `/add_staff 123456789 Ism`", parse_mode="Markdown")
 
 # ══════════════════════════════════════════════
 # 1. ПРИЁМКА
@@ -1153,8 +1211,35 @@ async def cmd_close_debt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not is_owner(uid): return
-    lines = [tr("staff_title", uid)] + [f"• {n} — `{sid}`" for sid, n in STAFF.items()]
-    lines.append(tr("staff_add", uid))
+    lg_uid = lg(uid)
+    d = load()
+    staff_phones = d.get("staff_phones", {})
+
+    lines = ["👥 *Xodimlar / Сотрудники*\n"]
+    for i, (sid, name) in enumerate(STAFF.items(), 1):
+        role = ROLES.get(sid, "mechanic")
+        role_label = ROLE_NAMES[lg_uid].get(role, role)
+        phone = staff_phones.get(str(sid), "—")
+        is_me = " _(siz/вы)_" if sid == uid else ""
+        lines.append(
+            f"{i}. *{name}*{is_me}\n"
+            f"   {role_label}\n"
+            f"   📱 {phone}\n"
+            f"   🆔 `{sid}`"
+        )
+
+    lines.append("\n─────────────────")
+    lines.append(
+        "*Qo\'shish / Добавить:*\n"
+        "`/add_staff` — ko\'rsatmalar/инструкция\n\n"
+        "*O\'chirish / Удалить:*\n"
+        "`/del_staff 123456789`\n\n"
+        "*O\'zgartirish / Изменить:*\n"
+        "`/edit_staff 123456789 name Yangi Ism`\n"
+        "`/edit_staff 123456789 role mechanic`\n"
+        "`/edit_staff 123456789 phone 901112233`\n\n"
+        "*Rollar:* `owner` `mechanic` `wash` `tint` `body` `elec`"
+    )
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_main(uid))
 
 # ══════════════════════════════════════════════
@@ -1182,6 +1267,10 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if uid not in USER_LANG:
         await update.message.reply_text(tr("choose_lang", uid), reply_markup=kb_lang()); return
 
+    # Смена языка
+    if text == "🌐 Til / Язык":
+        await update.message.reply_text(tr("choose_lang", uid), reply_markup=kb_lang()); return
+
     # Все кнопки меню — обоих языков
     if text in [T["btn_my"]["uz"], T["btn_my"]["ru"]]:         await cmd_my_orders(update, ctx)
     elif text in [T["btn_all"]["uz"], T["btn_all"]["ru"]]:     await cmd_all_orders(update, ctx)
@@ -1190,15 +1279,107 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif text in [T["btn_staff"]["uz"], T["btn_staff"]["ru"]]: await cmd_staff(update, ctx)
     elif text in [T["btn_myreport"]["uz"], T["btn_myreport"]["ru"]]: await cmd_myreport(update, ctx)
 
+async def cmd_del_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_owner(uid): return
+    args = ctx.args
+    if not args:
+        await update.message.reply_text("Format: `/del_staff 123456789`", parse_mode="Markdown"); return
+    try:
+        sid = int(args[0])
+        if sid == OWNER_ID:
+            await update.message.reply_text("⛔ Asosiy rahbarni o\'chirish mumkin emas / Нельзя удалить основного владельца"); return
+        if sid == uid:
+            await update.message.reply_text("⛔ O\'zingizni o\'chira olmaysiz / Нельзя удалить самого себя"); return
+        if sid not in STAFF:
+            await update.message.reply_text("❌ Xodim topilmadi / Сотрудник не найден"); return
+        name = STAFF.pop(sid)
+        ROLES.pop(sid, None)
+        d = load()
+        d.get("staff", {}).pop(str(sid), None)
+        d.get("roles", {}).pop(str(sid), None)
+        d.get("staff_phones", {}).pop(str(sid), None)
+        save(d)
+        await update.message.reply_text(f"✅ *{name}* o\'chirildi / удалён", parse_mode="Markdown", reply_markup=kb_main(uid))
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xato: {e}\nFormat: `/del_staff 123456789`", parse_mode="Markdown")
+
+
+async def cmd_edit_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_owner(uid): return
+    args = ctx.args
+
+    if len(args) < 3:
+        instr = (
+            "*O\'zgartirish / Изменить сотрудника:*\n\n"
+            "Ism/Имя:\n`/edit_staff 123456789 name Yangi Ism`\n\n"
+            "Rol/Роль:\n`/edit_staff 123456789 role mechanic`\n"
+            "_Rollar: owner mechanic wash tint body elec_\n\n"
+            "Telefon/Телефон:\n`/edit_staff 123456789 phone 901112233`"
+        )
+        await update.message.reply_text(instr, parse_mode="Markdown"); return
+
+    try:
+        sid = int(args[0])
+        field = args[1].lower()
+        value = " ".join(args[2:])
+
+        if sid not in STAFF:
+            await update.message.reply_text("❌ Xodim topilmadi / Сотрудник не найден"); return
+
+        d = load()
+        old_name = STAFF[sid]
+
+        if field == "name":
+            STAFF[sid] = value
+            d.setdefault("staff", {})[str(sid)] = value
+            save(d)
+            await update.message.reply_text(
+                f"✅ Ism o\'zgartirildi / Имя изменено:\n*{old_name}* → *{value}*",
+                parse_mode="Markdown", reply_markup=kb_main(uid)
+            )
+
+        elif field == "role":
+            valid_roles = ["owner","mechanic","wash","tint","body","elec"]
+            if value not in valid_roles:
+                await update.message.reply_text(
+                    f"❌ Noto\'g\'ri rol!\nTo\'g\'ri rollar: {', '.join(valid_roles)}",
+                    parse_mode="Markdown"); return
+            ROLES[sid] = value
+            d.setdefault("roles", {})[str(sid)] = value
+            save(d)
+            lg_uid = lg(uid)
+            role_label = ROLE_NAMES[lg_uid].get(value, value)
+            await update.message.reply_text(
+                f"✅ *{old_name}* roli o\'zgartirildi / роль изменена:\n{role_label}",
+                parse_mode="Markdown", reply_markup=kb_main(uid)
+            )
+
+        elif field == "phone":
+            phone = validate_phone(value)
+            if not phone:
+                await update.message.reply_text("❌ Noto\'g\'ri telefon! Misol: `901112233`", parse_mode="Markdown"); return
+            d.setdefault("staff_phones", {})[str(sid)] = phone
+            save(d)
+            await update.message.reply_text(
+                f"✅ *{old_name}* telefoni o\'zgartirildi / телефон изменён:\n📱 {phone}",
+                parse_mode="Markdown", reply_markup=kb_main(uid)
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Field noto\'g\'ri!\n`name` | `role` | `phone`",
+                parse_mode="Markdown")
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xato: {e}", parse_mode="Markdown")
+
+
 # ══════════════════════════════════════════════
 # ЗАПУСК
 # ══════════════════════════════════════════════
 def main():
-    load_langs()
-    # Загружаем сохранённых сотрудников
-    d = load()
-    for sid_str, name in d.get("staff", {}).items():
-        STAFF[int(sid_str)] = name
+    load_langs()  # загружает langs + staff + roles
 
     app = Application.builder().token(TOKEN).build()
 
@@ -1261,6 +1442,8 @@ def main():
     app.add_handler(CommandHandler("add_staff", cmd_add_staff))
     app.add_handler(CommandHandler("debt", cmd_close_debt))
     app.add_handler(CommandHandler("qarz", cmd_close_debt))
+    app.add_handler(CommandHandler("del_staff", cmd_del_staff))
+    app.add_handler(CommandHandler("edit_staff", cmd_edit_staff))
 
     # Кнопки меню с высоким приоритетом — обоих языков
     staff_btns   = [T["btn_staff"]["uz"],    T["btn_staff"]["ru"]]
