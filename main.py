@@ -2,6 +2,8 @@
 """AVTOSERVIS BOT v2.1"""
 
 import os, json, logging, re
+import psycopg2
+import psycopg2.extras
 from datetime import datetime, date
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -9,9 +11,9 @@ from telegram.ext import (
     ConversationHandler, ContextTypes, filters, CallbackQueryHandler
 )
 
-TOKEN    = os.environ.get("BOT_TOKEN", "ТВОЙ_ТОКЕН")
-OWNER_ID = int(os.environ.get("OWNER_ID", "368817660"))
-DATA_FILE = "data.json"
+TOKEN       = os.environ.get("BOT_TOKEN", "ТВОЙ_ТОКЕН")
+OWNER_ID    = int(os.environ.get("OWNER_ID", "368817660"))
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -329,69 +331,207 @@ def svc_needs_subs(svc, uid): return svc in T["svc_with_subs"][lg(uid)]
 ) = range(32)
 
 # ══════════════════════════════════════════════
-# БАЗА ДАННЫХ
+# БАЗА ДАННЫХ — PostgreSQL
 # ══════════════════════════════════════════════
-def load():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"orders": [], "next_id": 1, "clients": {}, "langs": {}}
+def get_conn():
+    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
 
-def save(d):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
+def init_db():
+    """Создаём таблицы если не существуют"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS orders (
+                    id SERIAL PRIMARY KEY,
+                    date TEXT, time TEXT,
+                    car TEXT, car_num TEXT,
+                    client TEXT, phone TEXT,
+                    problem TEXT, master TEXT,
+                    service TEXT,
+                    works JSONB DEFAULT '[]',
+                    parts JSONB DEFAULT '[]',
+                    payments JSONB DEFAULT '[]',
+                    expenses JSONB DEFAULT '[]',
+                    status TEXT DEFAULT 'in_work',
+                    created_by TEXT,
+                    closed_time TEXT, closed_date TEXT, closed_by TEXT
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value JSONB
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS clients (
+                    phone TEXT PRIMARY KEY,
+                    name TEXT,
+                    order_ids JSONB DEFAULT '[]'
+                )
+            """)
+        conn.commit()
+    logger.info("✅ DB initialized")
 
 def load_langs():
-    d = load()
-    for k, v in d.get("langs", {}).items():
-        USER_LANG[int(k)] = v
-    for k, v in d.get("staff", {}).items():
-        STAFF[int(k)] = v
-    for k, v in d.get("roles", {}).items():
-        ROLES[int(k)] = v
+    """Загружаем langs, staff, roles из БД"""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT key, value FROM settings WHERE key IN ('langs','staff','roles')")
+                for row in cur.fetchall():
+                    k, v = row["key"], row["value"]
+                    if k == "langs":
+                        for uid_s, lang in v.items():
+                            USER_LANG[int(uid_s)] = lang
+                    elif k == "staff":
+                        for uid_s, name in v.items():
+                            STAFF[int(uid_s)] = name
+                    elif k == "roles":
+                        for uid_s, role in v.items():
+                            ROLES[int(uid_s)] = role
+    except Exception as e:
+        logger.warning(f"load_langs: {e}")
+
+def _save_setting(key, value):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO settings(key, value) VALUES(%s, %s)
+                ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value
+            """, (key, json.dumps(value)))
+        conn.commit()
 
 def save_lang(uid, l):
     USER_LANG[uid] = l
-    d = load(); d.setdefault("langs", {})[str(uid)] = l; save(d)
+    langs = {str(k): v for k, v in USER_LANG.items()}
+    _save_setting("langs", langs)
+
+def _save_staff():
+    _save_setting("staff", {str(k): v for k, v in STAFF.items()})
+    _save_setting("roles", {str(k): v for k, v in ROLES.items()})
 
 def new_id():
-    d = load(); n = d["next_id"]; d["next_id"] += 1; save(d); return n
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT nextval('orders_id_seq')")
+            return cur.fetchone()[0]
 
 def add_order(o):
-    d = load(); d["orders"].append(o)
-    ph = o.get("phone","").strip()
-    if ph:
-        d["clients"].setdefault(ph, {"name": o["client"], "orders": []})["orders"].append(o["id"])
-    save(d)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO orders
+                (id, date, time, car, car_num, client, phone, problem, master,
+                 service, works, parts, payments, expenses, status, created_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                o["id"], o["date"], o["time"], o["car"], o.get("car_num",""),
+                o["client"], o.get("phone",""), o["problem"], o["master"],
+                o["service"],
+                json.dumps(o.get("works",[])), json.dumps(o.get("parts",[])),
+                json.dumps(o.get("payments",[])), json.dumps(o.get("expenses",[])),
+                o.get("status","in_work"), o.get("created_by","")
+            ))
+            # Обновляем клиентов
+            ph = o.get("phone","").strip()
+            if ph:
+                cur.execute("""
+                    INSERT INTO clients(phone, name, order_ids) VALUES(%s,%s,%s)
+                    ON CONFLICT(phone) DO UPDATE SET
+                        order_ids = clients.order_ids || %s::jsonb
+                """, (ph, o["client"], json.dumps([o["id"]]), json.dumps([o["id"]])))
+        conn.commit()
+
+def _row_to_order(row):
+    if not row: return None
+    o = dict(row)
+    for f in ["works","parts","payments","expenses"]:
+        if isinstance(o.get(f), str):
+            o[f] = json.loads(o[f])
+        elif o.get(f) is None:
+            o[f] = []
+    return o
 
 def get_order(oid):
-    return next((o for o in load()["orders"] if o["id"] == oid), None)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM orders WHERE id=%s", (oid,))
+            return _row_to_order(cur.fetchone())
 
 def upd_order(oid, u):
-    d = load()
-    for o in d["orders"]:
-        if o["id"] == oid: o.update(u)
-    save(d)
+    if not u: return
+    # Маппинг полей
+    field_map = {
+        "works": "works", "parts": "parts",
+        "payments": "payments", "expenses": "expenses",
+        "status": "status", "closed_time": "closed_time",
+        "closed_date": "closed_date", "closed_by": "closed_by",
+    }
+    sets = []
+    vals = []
+    for k, v in u.items():
+        col = field_map.get(k, k)
+        if isinstance(v, (list, dict)):
+            sets.append(f"{col} = %s::jsonb")
+            vals.append(json.dumps(v))
+        else:
+            sets.append(f"{col} = %s")
+            vals.append(v)
+    if not sets: return
+    vals.append(oid)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id=%s", vals)
+        conn.commit()
 
-def open_orders(): return [o for o in load()["orders"] if o["status"] != "closed"]
-def today_orders(): return [o for o in load()["orders"] if o["date"] == date.today().isoformat()]
+def open_orders():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM orders WHERE status != 'closed' ORDER BY id")
+            return [_row_to_order(r) for r in cur.fetchall()]
+
+def today_orders():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM orders WHERE date=%s ORDER BY id", (date.today().isoformat(),))
+            return [_row_to_order(r) for r in cur.fetchall()]
+
+def all_orders_list():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM orders ORDER BY id DESC")
+            return [_row_to_order(r) for r in cur.fetchall()]
+
 def my_open(uid):
     name = STAFF.get(uid, "")
     return [o for o in open_orders() if o.get("master") == name]
 
 def all_debts():
     r = []
-    for o in load()["orders"]:
+    for o in open_orders():
         amt = sum(p["amt_uzs"] for p in o.get("payments",[]) if p.get("is_debt") and not p.get("paid"))
         if amt > 0: r.append((o, amt))
     return r
 
 def client_history(phone):
-    d = load()
-    if phone in d["clients"]:
-        ids = set(d["clients"][phone]["orders"])
-        return [o for o in d["orders"] if o["id"] in ids]
-    return []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT order_ids FROM clients WHERE phone=%s", (phone,))
+            row = cur.fetchone()
+            if not row: return []
+            ids = row["order_ids"] if isinstance(row["order_ids"], list) else json.loads(row["order_ids"])
+            if not ids: return []
+            cur.execute("SELECT * FROM orders WHERE id = ANY(%s) ORDER BY id", (ids,))
+            return [_row_to_order(r) for r in cur.fetchall()]
+
+def search_by_car(car_num):
+    """Поиск по номеру машины"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM orders WHERE UPPER(car_num)=UPPER(%s) OR car ILIKE %s ORDER BY id DESC",
+                       (car_num, f"%{car_num}%"))
+            return [_row_to_order(r) for r in cur.fetchall()]
 
 def calc_total(o):
     parts = sum(p.get("sell_price", 0) for p in o.get("parts", []))
@@ -583,10 +723,7 @@ async def cmd_add_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lg_uid = lg(uid)
         role_label = ROLE_NAMES[lg_uid].get(role, role)
 
-        d = load()
-        d.setdefault("staff", {})[str(sid)] = sn
-        d.setdefault("roles", {})[str(sid)] = role
-        save(d)
+        _save_staff()
 
         await update.message.reply_text(
             f"✅ *{sn}* qo'shildi!\n👤 Rol: {role_label}\n🆔 ID: `{sid}`",
@@ -755,8 +892,8 @@ async def accept_work_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def _save_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    oid = new_id()
     car = f"{ctx.user_data['car_num']} {ctx.user_data['car_model']}"
+    oid = new_id()
     works = ctx.user_data.get("works", [])
     total_works = sum(w["price"] for w in works)
 
@@ -1135,9 +1272,7 @@ async def hist_show(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Если не нашли по телефону — ищем по номеру машины
     if not history:
         car_num = query.upper().replace(" ", "")
-        all_orders = load()["orders"]
-        matched = [o for o in all_orders if o.get("car_num","").upper().replace(" ","") == car_num
-                   or car_num in o.get("car","").upper().replace(" ","")]
+        matched = search_by_car(car_num)
         if matched:
             history = matched
             search_key = car_num
@@ -1197,7 +1332,7 @@ async def cmd_myreport(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not is_staff(uid): return
     name = sname(uid)
-    all_o = load()["orders"]
+    all_o = all_orders_list()
     active = [o for o in all_o if o.get("master")==name and o["status"]!="closed"]
     closed_today = [o for o in all_o if o.get("master")==name and o.get("closed_time","")[:10]==today_d()]
     income = sum(calc_paid(o) for o in closed_today)
@@ -1348,11 +1483,7 @@ async def cmd_del_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Xodim topilmadi / Сотрудник не найден"); return
         name = STAFF.pop(sid)
         ROLES.pop(sid, None)
-        d = load()
-        d.get("staff", {}).pop(str(sid), None)
-        d.get("roles", {}).pop(str(sid), None)
-        d.get("staff_phones", {}).pop(str(sid), None)
-        save(d)
+        _save_staff()
         await update.message.reply_text(f"✅ *{name}* o\'chirildi / удалён", parse_mode="Markdown", reply_markup=kb_main(uid))
     except Exception as e:
         await update.message.reply_text(f"❌ Xato: {e}\nFormat: `/del_staff 123456789`", parse_mode="Markdown")
@@ -1400,8 +1531,7 @@ async def cmd_edit_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     f"❌ Noto\'g\'ri rol!\nTo\'g\'ri rollar: {', '.join(valid_roles)}",
                     parse_mode="Markdown"); return
             ROLES[sid] = value
-            d.setdefault("roles", {})[str(sid)] = value
-            save(d)
+            _save_staff()
             lg_uid = lg(uid)
             role_label = ROLE_NAMES[lg_uid].get(value, value)
             await update.message.reply_text(
@@ -1413,8 +1543,8 @@ async def cmd_edit_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             phone = validate_phone(value)
             if not phone:
                 await update.message.reply_text("❌ Noto\'g\'ri telefon! Misol: `901112233`", parse_mode="Markdown"); return
-            d.setdefault("staff_phones", {})[str(sid)] = phone
-            save(d)
+            # Phone saved in STAFF metadata via _save_staff
+            _save_staff()
             await update.message.reply_text(
                 f"✅ *{old_name}* telefoni o\'zgartirildi / телефон изменён:\n📱 {phone}",
                 parse_mode="Markdown", reply_markup=kb_main(uid)
@@ -1564,8 +1694,9 @@ async def cmd_kassa(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_owner(uid):
         # ── КАССА МАСТЕРА — только его работы ──
         name = sname(uid)
-        all_orders = load()["orders"]
+        all_orders = all_orders_list()
         today = today_d()
+
 
         # Работы мастера за сегодня
         my_works = []
@@ -1655,10 +1786,9 @@ async def cmd_kassa(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Открытые долги
     open_debts = []
-    for o in load()["orders"]:
-        if o["status"] != "closed":
-            amt = sum(p["amt_uzs"] for p in o.get("payments",[]) if p.get("is_debt") and not p.get("paid"))
-            if amt > 0: open_debts.append((o, amt))
+    for o in open_orders():
+        amt = sum(p["amt_uzs"] for p in o.get("payments",[]) if p.get("is_debt") and not p.get("paid"))
+        if amt > 0: open_debts.append((o, amt))
     if open_debts:
         lines.append(f"\n⚠️ *Ochiq qarzlar / Открытые долги:*")
         for o, amt in open_debts:
@@ -1733,7 +1863,8 @@ async def callback_details(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ЗАПУСК
 # ══════════════════════════════════════════════
 def main():
-    load_langs()  # загружает langs + staff + roles
+    init_db()       # создаём таблицы
+    load_langs()    # загружаем langs + staff + roles
 
     app = Application.builder().token(TOKEN).build()
 
