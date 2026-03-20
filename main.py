@@ -2,8 +2,7 @@
 """AVTOSERVIS BOT v2.1"""
 
 import os, json, logging, re
-import psycopg2
-import psycopg2.extras
+import pg8000.native
 from datetime import datetime, date
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -331,76 +330,90 @@ def svc_needs_subs(svc, uid): return svc in T["svc_with_subs"][lg(uid)]
 ) = range(32)
 
 # ══════════════════════════════════════════════
-# БАЗА ДАННЫХ — PostgreSQL
+# БАЗА ДАННЫХ — PostgreSQL (pg8000 pure Python)
 # ══════════════════════════════════════════════
 def get_conn():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    """Открыть соединение с PostgreSQL"""
+    import urllib.parse
+    url = DATABASE_URL
+    # Парсим URL: postgresql://user:pass@host:port/db
+    r = urllib.parse.urlparse(url)
+    return pg8000.native.Connection(
+        host=r.hostname,
+        port=r.port or 5432,
+        database=r.path.lstrip("/"),
+        user=r.username,
+        password=r.password,
+        ssl_context=True if "railway" in (r.hostname or "") else None,
+    )
+
+def db_run(sql, params=None, fetch=False):
+    """Выполнить запрос и вернуть результаты"""
+    conn = get_conn()
+    try:
+        if params:
+            result = conn.run(sql, *params)
+        else:
+            result = conn.run(sql)
+        if fetch:
+            cols = [c["name"] for c in conn.columns]
+            return [dict(zip(cols, row)) for row in result]
+        return result
+    finally:
+        conn.close()
 
 def init_db():
     """Создаём таблицы если не существуют"""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS orders (
-                    id SERIAL PRIMARY KEY,
-                    date TEXT, time TEXT,
-                    car TEXT, car_num TEXT,
-                    client TEXT, phone TEXT,
-                    problem TEXT, master TEXT,
-                    service TEXT,
-                    works JSONB DEFAULT '[]',
-                    parts JSONB DEFAULT '[]',
-                    payments JSONB DEFAULT '[]',
-                    expenses JSONB DEFAULT '[]',
-                    status TEXT DEFAULT 'in_work',
-                    created_by TEXT,
-                    closed_time TEXT, closed_date TEXT, closed_by TEXT
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    value JSONB
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS clients (
-                    phone TEXT PRIMARY KEY,
-                    name TEXT,
-                    order_ids JSONB DEFAULT '[]'
-                )
-            """)
-        conn.commit()
+    db_run("""
+        CREATE TABLE IF NOT EXISTS orders (
+            id SERIAL PRIMARY KEY,
+            date TEXT, time TEXT,
+            car TEXT, car_num TEXT,
+            client TEXT, phone TEXT,
+            problem TEXT, master TEXT,
+            service TEXT,
+            works TEXT DEFAULT '[]',
+            parts TEXT DEFAULT '[]',
+            payments TEXT DEFAULT '[]',
+            expenses TEXT DEFAULT '[]',
+            status TEXT DEFAULT 'in_work',
+            created_by TEXT,
+            closed_time TEXT, closed_date TEXT, closed_by TEXT
+        )
+    """)
+    db_run("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    db_run("""
+        CREATE TABLE IF NOT EXISTS clients (
+            phone TEXT PRIMARY KEY,
+            name TEXT,
+            order_ids TEXT DEFAULT '[]'
+        )
+    """)
     logger.info("✅ DB initialized")
 
 def load_langs():
     """Загружаем langs, staff, roles из БД"""
     try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT key, value FROM settings WHERE key IN ('langs','staff','roles')")
-                for row in cur.fetchall():
-                    k, v = row["key"], row["value"]
-                    if k == "langs":
-                        for uid_s, lang in v.items():
-                            USER_LANG[int(uid_s)] = lang
-                    elif k == "staff":
-                        for uid_s, name in v.items():
-                            STAFF[int(uid_s)] = name
-                    elif k == "roles":
-                        for uid_s, role in v.items():
-                            ROLES[int(uid_s)] = role
+        rows = db_run("SELECT key, value FROM settings WHERE key IN ('langs','staff','roles')", fetch=True)
+        for row in rows:
+            k, v = row["key"], json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
+            if k == "langs":
+                for uid_s, lang in v.items(): USER_LANG[int(uid_s)] = lang
+            elif k == "staff":
+                for uid_s, name in v.items(): STAFF[int(uid_s)] = name
+            elif k == "roles":
+                for uid_s, role in v.items(): ROLES[int(uid_s)] = role
     except Exception as e:
         logger.warning(f"load_langs: {e}")
 
 def _save_setting(key, value):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO settings(key, value) VALUES(%s, %s)
-                ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value
-            """, (key, json.dumps(value)))
-        conn.commit()
+    db_run("DELETE FROM settings WHERE key=:1", [key])
+    db_run("INSERT INTO settings(key, value) VALUES(:1, :2)", [key, json.dumps(value)])
 
 def save_lang(uid, l):
     USER_LANG[uid] = l
@@ -412,96 +425,73 @@ def _save_staff():
     _save_setting("roles", {str(k): v for k, v in ROLES.items()})
 
 def new_id():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT nextval('orders_id_seq')")
-            return cur.fetchone()[0]
+    rows = db_run("SELECT nextval('orders_id_seq')", fetch=True)
+    return rows[0]["nextval"]
 
 def add_order(o):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO orders
-                (id, date, time, car, car_num, client, phone, problem, master,
-                 service, works, parts, payments, expenses, status, created_by)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """, (
-                o["id"], o["date"], o["time"], o["car"], o.get("car_num",""),
-                o["client"], o.get("phone",""), o["problem"], o["master"],
-                o["service"],
-                json.dumps(o.get("works",[])), json.dumps(o.get("parts",[])),
-                json.dumps(o.get("payments",[])), json.dumps(o.get("expenses",[])),
-                o.get("status","in_work"), o.get("created_by","")
-            ))
-            # Обновляем клиентов
-            ph = o.get("phone","").strip()
-            if ph:
-                cur.execute("""
-                    INSERT INTO clients(phone, name, order_ids) VALUES(%s,%s,%s)
-                    ON CONFLICT(phone) DO UPDATE SET
-                        order_ids = clients.order_ids || %s::jsonb
-                """, (ph, o["client"], json.dumps([o["id"]]), json.dumps([o["id"]])))
-        conn.commit()
+    db_run("""
+        INSERT INTO orders
+        (id, date, time, car, car_num, client, phone, problem, master,
+         service, works, parts, payments, expenses, status, created_by)
+        VALUES (:1,:2,:3,:4,:5,:6,:7,:8,:9,:10,:11,:12,:13,:14,:15,:16)
+    """, [
+        o["id"], o["date"], o["time"], o["car"], o.get("car_num",""),
+        o["client"], o.get("phone",""), o["problem"], o["master"],
+        o["service"],
+        json.dumps(o.get("works",[])), json.dumps(o.get("parts",[])),
+        json.dumps(o.get("payments",[])), json.dumps(o.get("expenses",[])),
+        o.get("status","in_work"), o.get("created_by","")
+    ])
+    ph = o.get("phone","").strip()
+    if ph:
+        existing = db_run("SELECT order_ids FROM clients WHERE phone=:1", [ph], fetch=True)
+        if existing:
+            ids = json.loads(existing[0]["order_ids"]) + [o["id"]]
+            db_run("UPDATE clients SET order_ids=:1 WHERE phone=:2", [json.dumps(ids), ph])
+        else:
+            db_run("INSERT INTO clients(phone,name,order_ids) VALUES(:1,:2,:3)",
+                   [ph, o["client"], json.dumps([o["id"]])])
 
 def _row_to_order(row):
     if not row: return None
     o = dict(row)
     for f in ["works","parts","payments","expenses"]:
-        if isinstance(o.get(f), str):
-            o[f] = json.loads(o[f])
-        elif o.get(f) is None:
+        v = o.get(f)
+        if isinstance(v, str):
+            try: o[f] = json.loads(v)
+            except: o[f] = []
+        elif v is None:
             o[f] = []
     return o
 
 def get_order(oid):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM orders WHERE id=%s", (oid,))
-            return _row_to_order(cur.fetchone())
+    rows = db_run("SELECT * FROM orders WHERE id=:1", [oid], fetch=True)
+    return _row_to_order(rows[0]) if rows else None
 
 def upd_order(oid, u):
     if not u: return
-    # Маппинг полей
-    field_map = {
-        "works": "works", "parts": "parts",
-        "payments": "payments", "expenses": "expenses",
-        "status": "status", "closed_time": "closed_time",
-        "closed_date": "closed_date", "closed_by": "closed_by",
-    }
     sets = []
     vals = []
+    i = 1
     for k, v in u.items():
-        col = field_map.get(k, k)
-        if isinstance(v, (list, dict)):
-            sets.append(f"{col} = %s::jsonb")
-            vals.append(json.dumps(v))
-        else:
-            sets.append(f"{col} = %s")
-            vals.append(v)
+        sets.append(f"{k} = :{i}")
+        vals.append(json.dumps(v) if isinstance(v, (list, dict)) else v)
+        i += 1
     if not sets: return
     vals.append(oid)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id=%s", vals)
-        conn.commit()
+    db_run(f"UPDATE orders SET {', '.join(sets)} WHERE id=:{i}", vals)
 
 def open_orders():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM orders WHERE status != 'closed' ORDER BY id")
-            return [_row_to_order(r) for r in cur.fetchall()]
+    rows = db_run("SELECT * FROM orders WHERE status != 'closed' ORDER BY id", fetch=True)
+    return [_row_to_order(r) for r in rows]
 
 def today_orders():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM orders WHERE date=%s ORDER BY id", (date.today().isoformat(),))
-            return [_row_to_order(r) for r in cur.fetchall()]
+    rows = db_run("SELECT * FROM orders WHERE date=:1 ORDER BY id", [date.today().isoformat()], fetch=True)
+    return [_row_to_order(r) for r in rows]
 
 def all_orders_list():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM orders ORDER BY id DESC")
-            return [_row_to_order(r) for r in cur.fetchall()]
+    rows = db_run("SELECT * FROM orders ORDER BY id DESC", fetch=True)
+    return [_row_to_order(r) for r in rows]
 
 def my_open(uid):
     name = STAFF.get(uid, "")
@@ -515,23 +505,24 @@ def all_debts():
     return r
 
 def client_history(phone):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT order_ids FROM clients WHERE phone=%s", (phone,))
-            row = cur.fetchone()
-            if not row: return []
-            ids = row["order_ids"] if isinstance(row["order_ids"], list) else json.loads(row["order_ids"])
-            if not ids: return []
-            cur.execute("SELECT * FROM orders WHERE id = ANY(%s) ORDER BY id", (ids,))
-            return [_row_to_order(r) for r in cur.fetchall()]
+    rows = db_run("SELECT order_ids FROM clients WHERE phone=:1", [phone], fetch=True)
+    if not rows: return []
+    ids = rows[0]["order_ids"]
+    if isinstance(ids, str): ids = json.loads(ids)
+    if not ids: return []
+    result = []
+    for oid in ids:
+        o = get_order(oid)
+        if o: result.append(o)
+    return result
 
 def search_by_car(car_num):
     """Поиск по номеру машины"""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM orders WHERE UPPER(car_num)=UPPER(%s) OR car ILIKE %s ORDER BY id DESC",
-                       (car_num, f"%{car_num}%"))
-            return [_row_to_order(r) for r in cur.fetchall()]
+    rows = db_run(
+        "SELECT * FROM orders WHERE UPPER(car_num)=UPPER(:1) OR UPPER(car) LIKE UPPER(:2) ORDER BY id DESC",
+        [car_num, f"%{car_num}%"], fetch=True
+    )
+    return [_row_to_order(r) for r in rows]
 
 def calc_total(o):
     parts = sum(p.get("sell_price", 0) for p in o.get("parts", []))
