@@ -3205,6 +3205,53 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 
+
+async def cmd_reset_db(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /reset_db         — показать предупреждение
+    /reset_db CONFIRM — очистить всю базу (заявки, клиенты, касса)
+    """
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await update.message.reply_text(tr("only_owner", uid))
+        return
+
+    args = ctx.args
+    if not args or args[0] != "CONFIRM":
+        await update.message.reply_text(
+            "⚠️ *Bu amal barcha ma\'lumotlarni o\'chiradi!*\n"
+            "_(Это удалит ВСЕ данные!)_\n\n"
+            "🗑 O\'chiriladigan:\n"
+            "  • Barcha buyurtmalar / Все заявки\n"
+            "  • Mijozlar tarixi / История клиентов\n"
+            "  • Kassa operatsiyalari / Кассовые операции\n\n"
+            "✅ Saqlanadigan:\n"
+            "  • Xodimlar / Сотрудники\n"
+            "  • Til sozlamalari / Настройки языка\n\n"
+            "❗ *Tasdiqlash uchun:*\n"
+            "`/reset_db CONFIRM`",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Очищаем
+    try:
+        db_run("TRUNCATE orders RESTART IDENTITY CASCADE")
+        db_run("TRUNCATE clients RESTART IDENTITY CASCADE")
+        db_run("TRUNCATE kassa_ops RESTART IDENTITY CASCADE")
+        await update.message.reply_text(
+            "✅ *Baza tozalandi!*\n"
+            "_(База очищена!)_\n\n"
+            "🔢 Buyurtmalar №1 dan boshlanadi\n"
+            "👥 Xodimlar va til sozlamalari saqlanib qoldi",
+            parse_mode="Markdown",
+            reply_markup=kb_main(uid)
+        )
+        logger.info(f"DB reset by uid={uid} ({sname(uid)})")
+    except Exception as e:
+        logger.error(f"reset_db error: {e}")
+        await update.message.reply_text(f"❌ Xato / Ошибка: {e}")
+
 # ══════════════════════════════════════════════
 # ЭКСПОРТ БАЗЫ ДАННЫХ
 # ══════════════════════════════════════════════
@@ -3487,6 +3534,7 @@ def main():
     app.add_handler(CommandHandler("edit_staff", cmd_edit_staff))
     app.add_handler(CommandHandler("debt",       cmd_close_debt))
     app.add_handler(CommandHandler("export",     cmd_export))
+    app.add_handler(CommandHandler("reset_db",   cmd_reset_db))
     app.add_handler(CommandHandler("qarz",       cmd_close_debt))
 
     # Кнопки меню (group=0)
