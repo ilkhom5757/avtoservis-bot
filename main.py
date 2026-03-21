@@ -2631,12 +2631,21 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
     # Утреннее напоминание — 09:00 Ташкент = 04:00 UTC
-    job_queue: JobQueue = app.job_queue
-    job_queue.run_daily(
-        morning_reminder,
-        time=dtime(hour=MORNING_HOUR_UTC, minute=MORNING_MIN_UTC, second=0),
-        name="morning_reminder"
-    )
+    # Требует: pip install "python-telegram-bot[job-queue]"
+    try:
+        job_queue = app.job_queue
+        if job_queue is not None:
+            job_queue.run_daily(
+                morning_reminder,
+                time=dtime(hour=MORNING_HOUR_UTC, minute=MORNING_MIN_UTC, second=0),
+                name="morning_reminder"
+            )
+            logger.info("✅ Morning reminder scheduled at 09:00 Tashkent")
+        else:
+            logger.warning("⚠️ JobQueue не установлен — утреннее напоминание отключено. "
+                           'Установи: pip install "python-telegram-bot[job-queue]"')
+    except Exception as e:
+        logger.warning(f"⚠️ JobQueue error: {e} — утреннее напоминание отключено")
 
     print("✅ Avtoservis Bot v3.0 ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
