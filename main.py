@@ -3165,6 +3165,179 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
 
 
+
+# ══════════════════════════════════════════════
+# ЭКСПОРТ БАЗЫ ДАННЫХ
+# ══════════════════════════════════════════════
+async def cmd_export(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /export         — все заявки + касса
+    /export orders  — только заявки
+    /export kassa   — только кассовые операции
+    /export finance — финансовый отчёт (оплаты + расходы по заявкам)
+    """
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await update.message.reply_text(tr("only_owner", uid))
+        return
+
+    import io, csv
+    from datetime import datetime as _dt
+
+    arg = (ctx.args[0].lower() if ctx.args else "all")
+    now_str = _dt.now().strftime("%Y-%m-%d_%H-%M")
+
+    await update.message.reply_text("⏳ Tayyor qilinmoqda / Подготавливаю...", parse_mode="Markdown")
+
+    files_sent = 0
+
+    # ── ЗАЯВКИ ──────────────────────────────────────────────────────────
+    if arg in ("all", "orders"):
+        orders = db_run("SELECT * FROM orders ORDER BY id", fetch=True)
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([
+            "ID", "Дата", "Время", "Машина", "Номер", "Клиент", "Телефон",
+            "Проблема", "Мастер", "Услуга", "Статус",
+            "Работы (итого)", "Запчасти (итого)", "Расходы (итого)",
+            "Оплачено", "Долг", "Маржа запчастей",
+            "Создал", "Дата закрытия", "Закрыл"
+        ])
+        for row in orders:
+            o = _row_to_order(row)
+            works_total  = sum(w.get("price", 0)      for w in o.get("works", []))
+            parts_sell   = sum(p.get("sell_price", 0)  for p in o.get("parts", []))
+            parts_cost   = sum(p.get("cost_price", 0)  for p in o.get("parts", []))
+            parts_margin = parts_sell - parts_cost
+            exp_total    = sum(e.get("amount", 0)      for e in o.get("expenses", []))
+            paid         = calc_paid(o)
+            debt         = sum(p["amt_uzs"] for p in o.get("payments", [])
+                               if p.get("is_debt") and not p.get("paid"))
+            writer.writerow([
+                o["id"], o.get("date",""), o.get("time",""),
+                o.get("car",""), o.get("car_num",""),
+                o.get("client",""), o.get("phone",""),
+                o.get("problem",""), o.get("master",""),
+                o.get("service",""), o.get("status",""),
+                works_total, parts_sell, exp_total,
+                paid, debt, parts_margin,
+                o.get("created_by",""),
+                o.get("closed_date",""), o.get("closed_by","")
+            ])
+
+        buf.seek(0)
+        await ctx.bot.send_document(
+            chat_id=uid,
+            document=io.BytesIO(buf.getvalue().encode("utf-8-sig")),
+            filename=f"orders_{now_str}.csv",
+            caption=f"📋 Buyurtmalar / Заявки — {len(orders)} ta"
+        )
+        files_sent += 1
+
+    # ── ДЕТАЛИ РАБОТ ────────────────────────────────────────────────────
+    if arg in ("all", "orders"):
+        orders = db_run("SELECT * FROM orders ORDER BY id", fetch=True)
+
+        buf2 = io.StringIO()
+        w2 = csv.writer(buf2)
+        w2.writerow([
+            "Заявка ID", "Дата", "Машина", "Клиент", "Мастер",
+            "Тип", "Название", "Цена", "Себестоимость", "Источник"
+        ])
+        for row in orders:
+            o = _row_to_order(row)
+            oid = o["id"]
+            for work in o.get("works", []):
+                w2.writerow([oid, o.get("date",""), o.get("car",""), o.get("client",""),
+                              o.get("master",""), "Работа", work.get("name",""),
+                              work.get("price",0), "", ""])
+            for part in o.get("parts", []):
+                w2.writerow([oid, o.get("date",""), o.get("car",""), o.get("client",""),
+                              o.get("master",""), "Запчасть", part.get("name",""),
+                              part.get("sell_price",0), part.get("cost_price",0),
+                              part.get("source","")])
+            for exp in o.get("expenses", []):
+                w2.writerow([oid, o.get("date",""), o.get("car",""), o.get("client",""),
+                              o.get("master",""), "Расход", exp.get("type",""),
+                              -exp.get("amount",0), "", exp.get("by","")])
+
+        buf2.seek(0)
+        await ctx.bot.send_document(
+            chat_id=uid,
+            document=io.BytesIO(buf2.getvalue().encode("utf-8-sig")),
+            filename=f"details_{now_str}.csv",
+            caption="📋 Работы, запчасти, расходы по заявкам"
+        )
+        files_sent += 1
+
+    # ── ОПЛАТЫ ──────────────────────────────────────────────────────────
+    if arg in ("all", "finance"):
+        orders = db_run("SELECT * FROM orders ORDER BY id", fetch=True)
+
+        buf3 = io.StringIO()
+        w3 = csv.writer(buf3)
+        w3.writerow([
+            "Заявка ID", "Дата заявки", "Машина", "Клиент", "Мастер",
+            "Способ", "Сумма UZS", "Долг", "Время", "Принял"
+        ])
+        for row in orders:
+            o = _row_to_order(row)
+            for p in o.get("payments", []):
+                w3.writerow([
+                    o["id"], o.get("date",""), o.get("car",""), o.get("client",""),
+                    o.get("master",""),
+                    p.get("method",""), p.get("amt_uzs",0),
+                    "Да" if p.get("is_debt") else "Нет",
+                    p.get("time",""), p.get("by","")
+                ])
+
+        buf3.seek(0)
+        await ctx.bot.send_document(
+            chat_id=uid,
+            document=io.BytesIO(buf3.getvalue().encode("utf-8-sig")),
+            filename=f"payments_{now_str}.csv",
+            caption="💰 Оплаты по заявкам"
+        )
+        files_sent += 1
+
+    # ── КАССА ────────────────────────────────────────────────────────────
+    if arg in ("all", "kassa"):
+        ops = db_run("SELECT * FROM kassa_ops ORDER BY id", fetch=True)
+
+        if ops:
+            buf4 = io.StringIO()
+            w4 = csv.writer(buf4)
+            w4.writerow([
+                "ID", "Тип", "Сумма", "Способ", "Категория",
+                "Описание", "Заявка ID", "Мастер", "Кто добавил", "Дата", "Время"
+            ])
+            for op in ops:
+                w4.writerow([
+                    op.get("id",""), op.get("op_type",""),
+                    op.get("amount",0), op.get("method",""),
+                    op.get("category",""), op.get("description",""),
+                    op.get("order_id",""), op.get("master_name",""),
+                    op.get("by_name",""), op.get("date",""), op.get("time","")
+                ])
+            buf4.seek(0)
+            await ctx.bot.send_document(
+                chat_id=uid,
+                document=io.BytesIO(buf4.getvalue().encode("utf-8-sig")),
+                filename=f"kassa_{now_str}.csv",
+                caption=f"💵 Kassa operatsiyalari / Кассовые операции — {len(ops)} ta"
+            )
+            files_sent += 1
+
+    # ── ИТОГОВОЕ СООБЩЕНИЕ ───────────────────────────────────────────────
+    await update.message.reply_text(
+        f"✅ *Export tayyor!*\n"
+        f"📁 {files_sent} ta fayl yuborildi / файлов отправлено\n\n"
+        f"💡 Excel-da ochish: *Matn → ustunlar* → ajratgich: *vergul*\n"
+        f"_(или файл сразу откроется в Excel если UTF-8 BOM)_",
+        parse_mode="Markdown"
+    )
+
 # ══════════════════════════════════════════════
 # ЗАПУСК
 # ══════════════════════════════════════════════
@@ -3274,6 +3447,7 @@ def main():
     app.add_handler(CommandHandler("del_staff",  cmd_del_staff))
     app.add_handler(CommandHandler("edit_staff", cmd_edit_staff))
     app.add_handler(CommandHandler("debt",       cmd_close_debt))
+    app.add_handler(CommandHandler("export",     cmd_export))
     app.add_handler(CommandHandler("qarz",       cmd_close_debt))
 
     # Кнопки меню (group=0)
