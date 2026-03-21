@@ -63,6 +63,18 @@ T = {
     "not_found":     {"uz": "❌ Topilmadi.",        "ru": "❌ Не найдено."},
     "enter_order":   {"uz": "Buyurtma *raqamini* kiriting:\n📌 Misol: `1`",
                       "ru": "Введи *номер заявки:*\n📌 Пример: `1`"},
+    "list_open_parts":  {"uz": "🔩 *Ochiq buyurtmalar:*", "ru": "🔩 *Открытые заявки:*"},
+    "list_open_pay":    {"uz": "💰 *Ochiq buyurtmalar:*", "ru": "💰 *Открытые заявки:*"},
+    "list_open_close":  {"uz": "✅ *Yopish:*",            "ru": "✅ *Закрыть:*"},
+    "list_open_trans":  {"uz": "🔄 *Topshirish:*",        "ru": "🔄 *Передать:*"},
+    "list_open_exp":    {"uz": "📤 *Xarajat:*",           "ru": "📤 *Расход:*"},
+    "list_open_status": {"uz": "🔄 *Status:*",            "ru": "🔄 *Статус:*"},
+    "list_open_edit":   {"uz": "✏️ *Tahrirlash:*",        "ru": "✏️ *Редактировать:*"},
+    "works_label_short": {"uz": "🔧 *Ishlar / Работы:*\n", "ru": "🔧 *Работы:*\n"},
+    "list_open_all":    {"uz": "📋 *Barcha ochiq ({n} ta):*", "ru": "📋 *Все открытые ({n}):*"},
+    "list_open_my":     {"uz": "📋 *{name} ({n} ta):*",   "ru": "📋 *{name} ({n}):*"},
+    "works_list_label": {"uz": "✅ *Ishlar:*",            "ru": "✅ *Работы:*"},
+    "not_found_order":  {"uz": "❌ Buyurtma topilmadi.",  "ru": "❌ Заявка не найдена."},
     "choose_lang":   {"uz": "🌐 Tilni tanlang / Выберите язык:", "ru": "🌐 Tilni tanlang / Выберите язык:"},
     "lang_set":      {"uz": "✅ Til: O'zbek\n\nAmal tanlang:", "ru": "✅ Язык: Русский\n\nВыбери действие:"},
 
@@ -891,7 +903,7 @@ def build_invoice(o, uid):
     works_block = ""
     if o.get("works"):
         lines = [f"  • {w['name']} — {fmt(w['price'])} сум" for w in o["works"]]
-        works_block = "🔧 *Ishlar / Работы:*\n" + "\n".join(lines) + "\n\n"
+        works_block = tr("works_label_short", uid) + "\n".join(lines) + "\n\n"
     parts_block = ""
     if o.get("parts"):
         lines = [f"  • {p['name']} — {fmt(p['sell_price'])} сум" for p in o["parts"]]
@@ -933,26 +945,40 @@ async def notify(ctx, text, uid):
 # КЛАВИАТУРЫ
 # ══════════════════════════════════════════════
 def kb_main(uid):
+    # Ряд 1: приёмка + мои машины (самые частые)
     rows = [
         [tr("btn_accept", uid), tr("btn_my", uid)],
-        [tr("btn_expense", uid), tr("btn_add_svc", uid)],
-        [tr("btn_close", uid), tr("btn_history", uid)],
-        [tr("btn_transfer", uid)],
-        [tr("btn_myreport", uid), "🌐 Til / Язык"],
     ]
-    row_mid = []
+
+    # Ряд 2: запчасть + оплата (только у тех у кого есть доступ)
+    row_part_pay = []
     if can_parts(uid):
-        row_mid.append(tr("btn_part", uid))
+        row_part_pay.append(tr("btn_part", uid))
     if can_pay(uid):
-        row_mid.append(tr("btn_pay", uid))
-    if row_mid:
-        rows.insert(1, row_mid)
+        row_part_pay.append(tr("btn_pay", uid))
+    if row_part_pay:
+        rows.append(row_part_pay)
+
+    # Ряд 3: добавить услугу + расход
+    rows.append([tr("btn_add_svc", uid), tr("btn_expense", uid)])
+
+    # Ряд 4: закрыть + передать
+    rows.append([tr("btn_close", uid), tr("btn_transfer", uid)])
+
+    # Ряд 5: история + мой отчёт
+    rows.append([tr("btn_history", uid), tr("btn_myreport", uid)])
+
+    # Ряд 6: язык (одна кнопка)
+    rows.append(["🌐 Til / Язык"])
+
+    # Владелец — дополнительные ряды
     if is_owner(uid):
         rows += [
-            [tr("btn_all", uid), tr("btn_report", uid)],
+            [tr("btn_all", uid),   tr("btn_report", uid)],
             [tr("btn_kassa", uid), tr("btn_debts", uid)],
             [tr("btn_staff", uid), tr("btn_edit", uid)],
         ]
+
     return ReplyKeyboardMarkup([[KeyboardButton(b) for b in r] for r in rows], resize_keyboard=True)
 
 
@@ -1297,7 +1323,7 @@ async def accept_works_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     hint = tr("svc_works_prices_hint", uid, works=f"{len(works_raw)} ta / шт.", example=example_prices)
     works_list = "\n".join(f"{i+1}. {w}" for i, w in enumerate(works_raw))
     await update.message.reply_text(
-        f"✅ *Ishlar / Работы:*\n{works_list}\n\n{hint}",
+        f"{tr('works_list_label', uid)}\n{works_list}\n\n{hint}",
         parse_mode="Markdown", reply_markup=kb_back(uid)
     )
     return A_WORKS_PRICE
@@ -1406,7 +1432,7 @@ async def part_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return ConversationHandler.END
     ctx.user_data.clear()
-    lines = ["🔩 *Ochiq / Открытые:*\n"] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
+    lines = [tr("list_open_parts", uid)] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_back(uid))
     return P_ORDER
 
@@ -1555,7 +1581,7 @@ async def pay_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return ConversationHandler.END
     ctx.user_data.clear()
-    lines = ["💰 *Ochiq / Открытые:*\n"] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
+    lines = [tr("list_open_pay", uid)] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_back(uid))
     return PAY_ORDER
 
@@ -1806,7 +1832,7 @@ async def close_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return ConversationHandler.END
     ctx.user_data.clear()
-    lines = ["✅ *Yopish / Закрыть:*\n"] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
+    lines = [tr("list_open_close", uid)] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_back(uid))
     return CLOSE_ORDER
 
@@ -1922,7 +1948,7 @@ async def transfer_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return ConversationHandler.END
     ctx.user_data.clear()
-    lines = ["🔄 *Topshirish / Передать:*\n"] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
+    lines = [tr("list_open_trans", uid)] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_back(uid))
     return TR_ORDER
 
@@ -1992,7 +2018,7 @@ async def status_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return ConversationHandler.END
     ctx.user_data.clear()
-    lines = ["🔄 *Status:*\n"] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
+    lines = [tr("list_open_status", uid)] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_back(uid))
     return ST_ORDER
 
@@ -2047,7 +2073,7 @@ async def edit_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return ConversationHandler.END
     ctx.user_data.clear()
-    lines = ["✏️ *Tahrirlash / Редактировать:*\n"] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
+    lines = [tr("list_open_edit", uid)] + [order_short(o, uid) for o in orders] + ["\n" + tr("enter_order", uid)]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_back(uid))
     return ED_ORDER
 
@@ -2230,7 +2256,7 @@ async def add_svc_works_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     example = "\n".join(["500000", "200000", "150000"][:len(works_raw)])
     works_list = "\n".join(f"{i+1}. {w}" for i, w in enumerate(works_raw))
     await update.message.reply_text(
-        f"✅ *Ishlar:*\n{works_list}\n\n" + tr("svc_works_prices_hint", uid, works=f"{len(works_raw)} ta", example=example),
+        f"{tr('works_list_label', uid)}\n{works_list}\n\n" + tr("svc_works_prices_hint", uid, works=f"{len(works_raw)} ta", example=example),
         parse_mode="Markdown", reply_markup=kb_back(uid)
     )
     return AS_WORKS_PRICE
@@ -2363,7 +2389,7 @@ async def cmd_my_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     # Заголовок
     await update.message.reply_text(
-        f"📋 *{sname(uid)}* — {len(orders)} ta / шт.:",
+        tr("list_open_my", uid, name=sname(uid), n=len(orders)),
         parse_mode="Markdown", reply_markup=kb_main(uid)
     )
     # Каждая машина отдельным сообщением с inline-кнопками
@@ -2381,7 +2407,7 @@ async def cmd_all_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return
     await update.message.reply_text(
-        f"📋 *Barcha ochiq / Все открытые — {len(orders)} ta:*",
+        tr("list_open_all", uid, n=len(orders)),
         parse_mode="Markdown", reply_markup=kb_main(uid)
     )
     for o in orders:
@@ -2436,19 +2462,32 @@ async def cmd_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not is_owner(uid):
         return
+    language = lg(uid)
     lines = [tr("staff_title", uid)]
     for i, (sid, name) in enumerate(STAFF.items(), 1):
         role = ROLES.get(sid, "mechanic")
-        role_label = ROLE_NAMES[lg(uid)].get(role, role)
+        role_label = ROLE_NAMES[language].get(role, role)
         is_me = " _(siz/вы)_" if sid == uid else ""
         lines.append(f"{i}. *{name}*{is_me}\n   {role_label}\n   🆔 `{sid}`")
-    lines.append(
-        "\n─────────────────\n"
-        "*Qo'shish:* `/add_staff ID Ism rol`\n"
-        "*O'chirish:* `/del_staff ID`\n"
-        "*O'zgartirish:* `/edit_staff ID name Yangi`\n"
-        "*Rollar:* `owner` `mechanic` `wash` `tint` `body` `elec`"
-    )
+
+    # Футер — переведён по языку, без бэкслэшей перед апострофом
+    lines.append("\n─────────────────")
+    if language == "uz":
+        lines.append(
+            "*Qoshish:* `/add_staff ID Ism rol`\n"
+            "*Ochirish:* `/del_staff ID`\n"
+            "*Ozgartirish:* `/edit_staff ID name Yangi Ism`\n"
+            "*Rollar:* `owner` `mechanic` `wash` `tint` `body` `elec`\n\n"
+            "💡 ID ni bilish: @userinfobot ga yozing"
+        )
+    else:
+        lines.append(
+            "*Добавить:* `/add_staff ID Имя роль`\n"
+            "*Удалить:* `/del_staff ID`\n"
+            "*Изменить:* `/edit_staff ID name НовоеИмя`\n"
+            "*Роли:* `owner` `mechanic` `wash` `tint` `body` `elec`\n\n"
+            "💡 Узнать ID: напиши @userinfobot"
+        )
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_main(uid))
 
 
@@ -2944,7 +2983,7 @@ async def callback_details(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = query.from_user.id
     o = get_order(oid)
     if not o:
-        await query.message.reply_text("❌ Buyurtma topilmadi / Заявка не найдена")
+        await query.message.reply_text(tr("not_found_order", uid))
         return
 
     try:
