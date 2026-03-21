@@ -476,7 +476,7 @@ def status_label(status, uid):
     TR_ORDER, TR_MASTER,
     ST_ORDER, ST_STATUS,
     ED_ORDER, ED_FIELD, ED_VALUE,
-) = range(41)
+) = range(40)
 
 # ══════════════════════════════════════════════
 # БАЗА ДАННЫХ
@@ -2252,9 +2252,9 @@ async def cmd_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines.append(f"{i}. *{name}*{is_me}\n   {role_label}\n   🆔 `{sid}`")
     lines.append(
         "\n─────────────────\n"
-        "*Qo\\'shish:* `/add_staff ID Ism rol`\n"
-        "*O\\'chirish:* `/del_staff ID`\n"
-        "*O\\'zgartirish:* `/edit_staff ID name Yangi`\n"
+        "*Qo'shish:* `/add_staff ID Ism rol`\n"
+        "*O'chirish:* `/del_staff ID`\n"
+        "*O'zgartirish:* `/edit_staff ID name Yangi`\n"
         "*Rollar:* `owner` `mechanic` `wash` `tint` `body` `elec`"
     )
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_main(uid))
