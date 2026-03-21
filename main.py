@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""AVTOSERVIS BOT v3.0 — полная переработка"""
+"""AVTOSERVIS BOT v3.2 — kassa module (balance, income, expense by category)"""
 
 import os, json, logging, re
-from datetime import datetime, date, time as dtime
+from datetime import datetime, date
 import pg8000
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ConversationHandler, ContextTypes, filters, CallbackQueryHandler,
-    JobQueue,
 )
 
 TOKEN        = os.environ.get("BOT_TOKEN", "")
@@ -405,6 +404,70 @@ T = {
     # Сотрудники
     "staff_title": {"uz": "👥 *Xodimlar:*\n", "ru": "👥 *Сотрудники:*\n"},
 
+    # Уведомления мастерам
+    "notify_assigned": {
+        "uz": "🚗 *Yangi mashina №{id}!*\n{car} | {client}\n🔧 {service}\n📝 {problem}",
+        "ru": "🚗 *Новая машина №{id}!*\n{car} | {client}\n🔧 {service}\n📝 {problem}"
+    },
+    "notify_transferred": {
+        "uz": "🔄 *№{id} sizga topshirildi*\n{car} | {client}\n👤 {from_master}dan",
+        "ru": "🔄 *№{id} передана вам*\n{car} | {client}\n👤 от {from_master}"
+    },
+    "notify_paid": {
+        "uz": "✅ *№{id} to'liq to'landi*\n{car} | {client}\n💰 {total} so'm — olib ketishga tayyor",
+        "ru": "✅ *№{id} полностью оплачена*\n{car} | {client}\n💰 {total} сум — готова к выдаче"
+    },
+
+    # ── Касса ─────────────────────────────────────
+    "kassa_btn_balance":  {"uz": "💰 Balans",          "ru": "💰 Баланс"},
+    "kassa_btn_income":   {"uz": "➕ Kirim",            "ru": "➕ Приход"},
+    "kassa_btn_expense":  {"uz": "➖ Chiqim",           "ru": "➖ Расход"},
+    "kassa_btn_history":  {"uz": "📜 Tarix",            "ru": "📜 История"},
+    "kassa_menu_title":   {"uz": "💵 *Kassa*\n\nNimani qilmoqchisiz?",
+                           "ru": "💵 *Касса*\n\nЧто хотите сделать?"},
+    "kassa_balance_title": {
+        "uz": ("💰 *Kassa balansi*\n\n"
+               "📥 Jami kirim:    *{income} so'm*\n"
+               "📤 Jami chiqim:  *{expense} so'm*\n"
+               "─────────────────\n"
+               "✅ *Joriy balans: {balance} so'm*\n\n"
+               "📅 Bugun kirimi:  {today_in} so'm\n"
+               "📅 Bugun chiqimi: {today_out} so'm"),
+        "ru": ("💰 *Баланс кассы*\n\n"
+               "📥 Всего приходов:  *{income} сум*\n"
+               "📤 Всего расходов: *{expense} сум*\n"
+               "─────────────────\n"
+               "✅ *Текущий баланс: {balance} сум*\n\n"
+               "📅 Сегодня приход:  {today_in} сум\n"
+               "📅 Сегодня расход:  {today_out} сум")
+    },
+    "kassa_inc_amt_q":    {"uz": "➕ *Kirim*\n\nSumma (to'liq):\n📌 Misol: `500000`",
+                           "ru": "➕ *Приход*\n\nСумма (полностью):\n📌 Пример: `500000`"},
+    "kassa_inc_method_q": {"uz": "💳 To'lov usuli:", "ru": "💳 Способ поступления:"},
+    "kassa_inc_desc_q":   {"uz": "📝 *Izoh — mablag' qaerdan keldi?*\n📌 Misol: `Egasidan qarz`",
+                           "ru": "📝 *Описание — откуда деньги?*\n📌 Пример: `Займ от владельца`"},
+    "kassa_inc_done":     {"uz": "✅ *Kirim qo'shildi*\n💰 {amount} so'm ({method})\n📝 {desc}",
+                           "ru": "✅ *Приход добавлен*\n💰 {amount} сум ({method})\n📝 {desc}"},
+    "kassa_exp_cat_q":    {"uz": "➖ *Chiqim*\n\nChiqim turi:", "ru": "➖ *Расход*\n\nТип расхода:"},
+    "kassa_exp_cat_order": {"uz": "🚗 Mashina bo'yicha",  "ru": "🚗 По машине"},
+    "kassa_exp_cat_master":{"uz": "👨\u200d🔧 Masterlarga", "ru": "👨\u200d🔧 Мастерам"},
+    "kassa_exp_cat_other": {"uz": "💼 Boshqa",            "ru": "💼 Прочее"},
+    "kassa_exp_order_q":  {"uz": "🚗 Qaysi mashina?\n\nBuyurtma raqamini kiriting:",
+                           "ru": "🚗 К какой машине?\n\nВведи номер заявки:"},
+    "kassa_exp_master_q": {"uz": "👨\u200d🔧 Qaysi mastarga?", "ru": "👨\u200d🔧 Какому мастеру?"},
+    "kassa_exp_desc_q":   {"uz": "📝 *Izoh (majburiy):*\n📌 Misol: `Yog' sotib olindi`",
+                           "ru": "📝 *Описание (обязательно):*\n📌 Пример: `Куплено масло`"},
+    "kassa_exp_amt_q":    {"uz": "💸 *Summa (to'liq):*\n📌 Misol: `150000`",
+                           "ru": "💸 *Сумма (полностью):*\n📌 Пример: `150000`"},
+    "kassa_exp_method_q": {"uz": "💳 Qanday to'landi?", "ru": "💳 Как выплачено?"},
+    "kassa_exp_done":     {"uz": "✅ *Chiqim qo'shildi*\n💸 {amount} so'm\n📂 {category}\n📝 {desc}",
+                           "ru": "✅ *Расход добавлен*\n💸 {amount} сум\n📂 {category}\n📝 {desc}"},
+    "kassa_history_title":{"uz": "📜 *Kassa tarixi* (oxirgi {n} ta):\n",
+                           "ru": "📜 *История кассы* (последние {n}):\n"},
+    "kassa_history_none": {"uz": "Hali operatsiya yo'q.", "ru": "Операций пока нет."},
+    "kassa_methods":      {"uz": ["💵 Naqd UZS","💳 Karta","🏦 O'tkazma","💵 Naqd USD"],
+                           "ru": ["💵 Наличные UZS","💳 Карта","🏦 Перечисление","💵 Наличные USD"]},
+
     # Утреннее уведомление
     "morning_msg": {
         "uz": ("🌅 *Bugungi holat*\n\n"
@@ -476,7 +539,10 @@ def status_label(status, uid):
     TR_ORDER, TR_MASTER,
     ST_ORDER, ST_STATUS,
     ED_ORDER, ED_FIELD, ED_VALUE,
-) = range(40)
+    # Касса
+    KA_MENU, KA_INC_AMT, KA_INC_METHOD, KA_INC_DESC,
+    KA_EXP_CAT, KA_EXP_ORDER, KA_EXP_MASTER, KA_EXP_DESC, KA_EXP_AMT, KA_EXP_METHOD,
+) = range(50)
 
 # ══════════════════════════════════════════════
 # БАЗА ДАННЫХ
@@ -525,17 +591,26 @@ def init_db():
             date TEXT, time TEXT,
             car TEXT, car_num TEXT,
             client TEXT, phone TEXT,
-            problem TEXT, master TEXT,
+            problem TEXT, master TEXT, master_id TEXT DEFAULT '',
             service TEXT,
             works TEXT DEFAULT '[]',
             parts TEXT DEFAULT '[]',
             payments TEXT DEFAULT '[]',
             expenses TEXT DEFAULT '[]',
             status TEXT DEFAULT 'accepted',
-            created_by TEXT,
+            created_by TEXT, created_by_id TEXT DEFAULT '',
             closed_time TEXT, closed_date TEXT, closed_by TEXT
         )
     """)
+    # Миграция: добавить колонки если не существуют (для уже существующей БД)
+    for col_sql in [
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS master_id TEXT DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by_id TEXT DEFAULT ''",
+    ]:
+        try:
+            db_run(col_sql)
+        except Exception as e:
+            logger.warning(f"Migration: {e}")
     db_run("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -547,6 +622,22 @@ def init_db():
             phone TEXT PRIMARY KEY,
             name TEXT,
             order_ids TEXT DEFAULT '[]'
+        )
+    """)
+    db_run("""
+        CREATE TABLE IF NOT EXISTS kassa_ops (
+            id SERIAL PRIMARY KEY,
+            op_type TEXT,
+            amount INTEGER,
+            method TEXT DEFAULT 'cash_uzs',
+            category TEXT,
+            description TEXT,
+            order_id INTEGER DEFAULT NULL,
+            master_name TEXT DEFAULT '',
+            by_name TEXT,
+            by_id TEXT,
+            date TEXT,
+            time TEXT
         )
     """)
     logger.info("DB initialized")
@@ -610,16 +701,16 @@ def new_id():
 def add_order(o):
     db_run("""
         INSERT INTO orders
-        (id, date, time, car, car_num, client, phone, problem, master,
-         service, works, parts, payments, expenses, status, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        (id, date, time, car, car_num, client, phone, problem, master, master_id,
+         service, works, parts, payments, expenses, status, created_by, created_by_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
     """, [
         o["id"], o["date"], o["time"], o["car"], o.get("car_num", ""),
-        o["client"], o.get("phone", ""), o["problem"], o["master"],
+        o["client"], o.get("phone", ""), o["problem"], o["master"], str(o.get("master_id", "")),
         o["service"],
         json.dumps(o.get("works", [])), json.dumps(o.get("parts", [])),
         json.dumps(o.get("payments", [])), json.dumps(o.get("expenses", [])),
-        o.get("status", "accepted"), o.get("created_by", "")
+        o.get("status", "accepted"), o.get("created_by", ""), str(o.get("created_by_id", ""))
     ])
     ph = o.get("phone", "").strip()
     if ph:
@@ -668,7 +759,13 @@ def all_orders_list():
 
 def my_open(uid):
     name = STAFF.get(uid, "")
-    return [o for o in open_orders() if o.get("master") == name]
+    uid_str = str(uid)
+    result = []
+    for o in open_orders():
+        mid = o.get("master_id", "")
+        if (mid and mid == uid_str) or (not mid and o.get("master") == name):
+            result.append(o)
+    return result
 
 
 def all_debts():
@@ -720,6 +817,38 @@ def calc_expenses(o):
     return sum(e["amount"] for e in o.get("expenses", []))
 
 
+# ── Кассовые операции ──────────────────────────────────────────────────────
+def kassa_add(op):
+    db_run("""
+        INSERT INTO kassa_ops
+        (op_type, amount, method, category, description, order_id,
+         master_name, by_name, by_id, date, time)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    """, [
+        op["op_type"], int(op["amount"]),
+        op.get("method", "cash_uzs"),
+        op.get("category", ""),
+        op.get("description", ""),
+        op.get("order_id"),
+        op.get("master_name", ""),
+        op.get("by_name", ""),
+        str(op.get("by_id", "")),
+        today_d(), now_t()
+    ])
+
+
+def kassa_ops_today():
+    rows = db_run("SELECT * FROM kassa_ops WHERE date=$1 ORDER BY id", [today_d()], fetch=True)
+    return rows or []
+
+
+def kassa_ops_all(limit=100):
+    rows = db_run("SELECT * FROM kassa_ops ORDER BY id DESC LIMIT $1", [limit], fetch=True)
+    return rows or []
+
+
+
+
 # ══════════════════════════════════════════════
 # УТИЛИТЫ
 # ══════════════════════════════════════════════
@@ -727,7 +856,14 @@ def is_owner(uid): return ROLES.get(uid) == "owner" or uid == OWNER_ID
 def is_staff(uid): return uid in STAFF or uid == OWNER_ID
 def can_parts(uid): return ROLES.get(uid, "mechanic") in PARTS_ROLES
 def can_pay(uid):   return ROLES.get(uid, "mechanic") in PAY_ROLES
-def can_close_order(uid, o): return is_owner(uid) or o.get("master") == STAFF.get(uid, "")
+def can_close_order(uid, o):
+    if is_owner(uid):
+        return True
+    uid_str = str(uid)
+    mid = o.get("master_id", "")
+    if mid:
+        return mid == uid_str
+    return o.get("master") == STAFF.get(uid, "")
 def sname(uid): return STAFF.get(uid, f"ID:{uid}")
 
 
@@ -801,7 +937,7 @@ def kb_main(uid):
         [tr("btn_accept", uid), tr("btn_my", uid)],
         [tr("btn_expense", uid), tr("btn_add_svc", uid)],
         [tr("btn_close", uid), tr("btn_history", uid)],
-        [tr("btn_transfer", uid), tr("btn_status", uid)],
+        [tr("btn_transfer", uid)],
         [tr("btn_myreport", uid), "🌐 Til / Язык"],
     ]
     row_mid = []
@@ -1200,15 +1336,20 @@ async def _save_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     works = ctx.user_data.get("works", [])
     total_works = sum(w["price"] for w in works)
 
+    # Найти uid мастера по имени
+    master_name = ctx.user_data["master"]
+    master_uid = next((k for k, v in STAFF.items() if v == master_name), None)
+
     order = {
         "id": oid, "date": today_d(), "time": now_t(),
         "car": car, "car_num": ctx.user_data["car_num"],
         "client": ctx.user_data["client"], "phone": ctx.user_data.get("phone", ""),
-        "problem": ctx.user_data["problem"], "master": ctx.user_data["master"],
+        "problem": ctx.user_data["problem"], "master": master_name,
+        "master_id": str(master_uid) if master_uid else "",
         "service": ctx.user_data["service"],
         "works": works,
         "parts": [], "payments": [], "expenses": [],
-        "status": "accepted", "created_by": sname(uid),
+        "status": "accepted", "created_by": sname(uid), "created_by_id": str(uid),
     }
     add_order(order)
 
@@ -1222,6 +1363,17 @@ async def _save_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["last_order_id"] = oid
     await update.message.reply_text(msg, parse_mode="Markdown")
     await notify(ctx, msg, uid)
+
+    # Уведомить мастера если он не тот кто принял
+    if master_uid and master_uid != uid and master_uid in USER_LANG:
+        try:
+            notify_text = tr("notify_assigned", master_uid,
+                             id=oid, car=car, client=order["client"],
+                             service=order["service"], problem=order["problem"])
+            await ctx.bot.send_message(chat_id=master_uid, text=notify_text, parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"notify master: {e}")
+
     await update.message.reply_text(tr("add_parts_q", uid), reply_markup=kb_yes_no(uid))
     return AFTER_ACCEPT
 
@@ -1522,11 +1674,29 @@ async def pay_amount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         remaining = calc_remaining(o)
 
         if is_debt or remaining <= 0:
+            # Автостатус: полностью оплачено → готова
+            if not is_debt and o.get("status") not in ("closed", "delivered"):
+                upd_order(oid, {"status": "ready"})
             msg = tr("pay_done", uid, id=oid, total=fmt(calc_paid(o)))
             if is_debt:
                 msg += f"\n📝 Qarz / Долг: {fmt(amt_uzs)} сум"
             await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=kb_main(uid))
             await notify(ctx, msg, uid)
+            # Уведомить мастера об оплате (если не он сам принимал оплату)
+            if not is_debt:
+                o_fresh = get_order(oid)
+                mid_str = o_fresh.get("master_id", "")
+                if mid_str:
+                    try:
+                        master_notify_uid = int(mid_str)
+                        if master_notify_uid != uid and master_notify_uid in USER_LANG:
+                            ntxt = tr("notify_paid", master_notify_uid,
+                                      id=oid, car=o["car"], client=o["client"],
+                                      total=fmt(calc_paid(o_fresh)))
+                            await ctx.bot.send_message(chat_id=master_notify_uid,
+                                                       text=ntxt, parse_mode="Markdown")
+                    except Exception as e:
+                        logger.warning(f"notify paid master: {e}")
             return ConversationHandler.END
         else:
             await update.message.reply_text(
@@ -1669,6 +1839,7 @@ async def close_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         upd_order(oid, {"status": "closed", "closed_time": now_t(),
                         "closed_date": today_d(), "closed_by": sname(uid)})
+        # Автостатус: выдана при закрытии
         o = get_order(oid)
 
         paid     = calc_paid(o)
@@ -1784,11 +1955,28 @@ async def transfer_master(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.message.text not in masters:
         await update.message.reply_text(tr("transfer_who", uid), reply_markup=kb_list(masters, uid))
         return TR_MASTER
+    new_master_name = update.message.text
+    new_master_uid = next((k for k, v in STAFF.items() if v == new_master_name), None)
     oid = ctx.user_data["order_id"]
-    upd_order(oid, {"master": update.message.text})
-    msg = tr("transfer_done", uid, id=oid, master=update.message.text)
+    upd_order(oid, {
+        "master": new_master_name,
+        "master_id": str(new_master_uid) if new_master_uid else "",
+    })
+    msg = tr("transfer_done", uid, id=oid, master=new_master_name)
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=kb_main(uid))
     await notify(ctx, msg, uid)
+
+    # Уведомить нового мастера
+    if new_master_uid and new_master_uid != uid and new_master_uid in USER_LANG:
+        try:
+            o = get_order(oid)
+            notify_text = tr("notify_transferred", new_master_uid,
+                             id=oid, car=o["car"], client=o["client"],
+                             from_master=sname(uid))
+            await ctx.bot.send_message(chat_id=new_master_uid, text=notify_text, parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"notify transfer: {e}")
+
     return ConversationHandler.END
 
 
@@ -2173,11 +2361,14 @@ async def cmd_my_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not orders:
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return
-    lines = [f"📋 *{sname(uid)}* ({len(orders)}):\n"]
+    # Заголовок
+    await update.message.reply_text(
+        f"📋 *{sname(uid)}* — {len(orders)} ta / шт.:",
+        parse_mode="Markdown", reply_markup=kb_main(uid)
+    )
+    # Каждая машина отдельным сообщением с inline-кнопками
     for o in orders:
-        lines.append(order_short(o, uid))
-        lines.append("─────────────")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_main(uid))
+        await send_order_card(ctx.bot, uid, o)
 
 
 async def cmd_all_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2189,11 +2380,12 @@ async def cmd_all_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not orders:
         await update.message.reply_text(tr("no_open", uid), reply_markup=kb_main(uid))
         return
-    lines = [f"📋 *Barcha ochiq / Все открытые ({len(orders)}):*\n"]
+    await update.message.reply_text(
+        f"📋 *Barcha ochiq / Все открытые — {len(orders)} ta:*",
+        parse_mode="Markdown", reply_markup=kb_main(uid)
+    )
     for o in orders:
-        lines.append(order_short(o, uid, show_margin=True))
-        lines.append("─────────────")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_main(uid))
+        await send_order_card(ctx.bot, uid, o, show_margin=True)
 
 
 async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2258,6 +2450,355 @@ async def cmd_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "*Rollar:* `owner` `mechanic` `wash` `tint` `body` `elec`"
     )
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_main(uid))
+
+
+# ══════════════════════════════════════════════
+# КАССА v3.2 — полный модуль
+# ══════════════════════════════════════════════
+def get_kassa_methods(uid):
+    return T["kassa_methods"][lg(uid)]
+
+
+def kassa_menu_kb(uid):
+    return ReplyKeyboardMarkup([
+        [KeyboardButton(tr("kassa_btn_balance", uid)), KeyboardButton(tr("kassa_btn_history", uid))],
+        [KeyboardButton(tr("kassa_btn_income",  uid)), KeyboardButton(tr("kassa_btn_expense", uid))],
+        [KeyboardButton(tr("cancel", uid))],
+    ], resize_keyboard=True)
+
+
+async def kassa_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_staff(uid):
+        return ConversationHandler.END
+    if not is_owner(uid):
+        await _kassa_my_show(update, uid)
+        return ConversationHandler.END
+    ctx.user_data.clear()
+    await update.message.reply_text(
+        tr("kassa_menu_title", uid), parse_mode="Markdown",
+        reply_markup=kassa_menu_kb(uid)
+    )
+    return KA_MENU
+
+
+async def _kassa_my_show(update, uid):
+    name = sname(uid)
+    today = today_d()
+    my_works = [
+        (o, w) for o in all_orders_list()
+        for w in o.get("works", [])
+        if w.get("master") == name and o["date"] == today
+    ]
+    if not my_works:
+        await update.message.reply_text(tr("kassa_my_none", uid), reply_markup=kb_main(uid))
+        return
+    works_total = sum(w["price"] for _, w in my_works)
+    works_lines = "\n".join(
+        f"  • №{o['id']} {o['car']} | {w['name']} — {fmt(w['price'])} сум"
+        for o, w in my_works
+    )
+    my_expenses = [
+        (o, e) for o in all_orders_list()
+        for e in o.get("expenses", [])
+        if e.get("by_id") == uid and o["date"] == today
+    ]
+    exp_total = sum(e["amount"] for _, e in my_expenses)
+    exp_lines = "\n".join(
+        f"  • №{o['id']} | {e['type']}: {e.get('desc','')} — {fmt(e['amount'])} сум"
+        for o, e in my_expenses
+    )
+    lines = [tr("kassa_my_title", uid, name=name)]
+    lines.append(tr("kassa_my_works", uid, lines=works_lines, total=fmt(works_total)))
+    if my_expenses:
+        lines.append(tr("kassa_my_exp", uid, total=fmt(exp_total), lines=exp_lines))
+    lines.append(tr("kassa_my_net", uid, v=fmt(works_total - exp_total)))
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_main(uid))
+
+
+async def kassa_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    text = update.message.text
+    if is_back(text, uid):
+        return await cancel(update, ctx)
+    if text == tr("kassa_btn_balance", uid):
+        await _kassa_balance(update, uid)
+        return KA_MENU
+    if text == tr("kassa_btn_history", uid):
+        await _kassa_history(update, uid)
+        return KA_MENU
+    if text == tr("kassa_btn_income", uid):
+        await update.message.reply_text(tr("kassa_inc_amt_q", uid),
+                                        parse_mode="Markdown", reply_markup=kb_back(uid))
+        return KA_INC_AMT
+    if text == tr("kassa_btn_expense", uid):
+        cats = [tr("kassa_exp_cat_order", uid),
+                tr("kassa_exp_cat_master", uid),
+                tr("kassa_exp_cat_other", uid)]
+        await update.message.reply_text(tr("kassa_exp_cat_q", uid),
+                                        parse_mode="Markdown",
+                                        reply_markup=kb_list(cats, uid, cols=1))
+        return KA_EXP_CAT
+    await update.message.reply_text(tr("kassa_menu_title", uid),
+                                    parse_mode="Markdown", reply_markup=kassa_menu_kb(uid))
+    return KA_MENU
+
+
+async def _kassa_balance(update, uid):
+    ops = kassa_ops_all(limit=100000)
+    total_income  = sum(op["amount"] for op in ops if op["op_type"] == "income")
+    total_expense = sum(op["amount"] for op in ops if op["op_type"] == "expense")
+    all_ords = all_orders_list()
+    orders_income = orders_expense = 0
+    for o in all_ords:
+        for p in o.get("payments", []):
+            if not (p.get("is_debt") and not p.get("paid")):
+                orders_income += p.get("amt_uzs", 0)
+        orders_expense += calc_expenses(o)
+    total_in  = total_income  + orders_income
+    total_out = total_expense + orders_expense
+    balance   = total_in - total_out
+    today_ops = kassa_ops_today()
+    t_in  = sum(op["amount"] for op in today_ops if op["op_type"] == "income")
+    t_out = sum(op["amount"] for op in today_ops if op["op_type"] == "expense")
+    for o in today_orders():
+        for p in o.get("payments", []):
+            if not (p.get("is_debt") and not p.get("paid")):
+                t_in += p.get("amt_uzs", 0)
+        t_out += calc_expenses(o)
+    await update.message.reply_text(
+        tr("kassa_balance_title", uid,
+           income=fmt(total_in), expense=fmt(total_out), balance=fmt(balance),
+           today_in=fmt(t_in), today_out=fmt(t_out)),
+        parse_mode="Markdown"
+    )
+
+
+async def _kassa_history(update, uid, limit=20):
+    ops = kassa_ops_all(limit=limit)
+    if not ops:
+        await update.message.reply_text(tr("kassa_history_none", uid))
+        return
+    lines = [tr("kassa_history_title", uid, n=len(ops))]
+    for op in ops:
+        icon = "📥" if op["op_type"] == "income" else "📤"
+        cat  = op.get("category") or ""
+        master = f" | 👤 {op['master_name']}" if op.get("master_name") else ""
+        order  = f" | 🚗 №{op['order_id']}" if op.get("order_id") else ""
+        desc   = op.get("description") or "—"
+        lines.append(
+            f"{icon} *{fmt(op['amount'])} сум* — {op['date']}\n"
+            f"   {cat}{master}{order}\n"
+            f"   📝 {desc} | {op.get('method','')}"
+        )
+        lines.append("─────────────")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+# ── ПРИХОД ────────────────────────────────────────────────────────────────
+async def kassa_inc_amt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_back(update.message.text, uid):
+        await update.message.reply_text(tr("kassa_menu_title", uid),
+                                        parse_mode="Markdown", reply_markup=kassa_menu_kb(uid))
+        return KA_MENU
+    try:
+        ctx.user_data["ka_amount"] = int(update.message.text.replace(" ", ""))
+        await update.message.reply_text(tr("kassa_inc_method_q", uid),
+                                        reply_markup=kb_list(get_kassa_methods(uid), uid, cols=2))
+        return KA_INC_METHOD
+    except Exception:
+        await update.message.reply_text(tr("enter_num", uid))
+        return KA_INC_AMT
+
+
+async def kassa_inc_method(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_back(update.message.text, uid):
+        await update.message.reply_text(tr("kassa_inc_amt_q", uid),
+                                        parse_mode="Markdown", reply_markup=kb_back(uid))
+        return KA_INC_AMT
+    if update.message.text not in get_kassa_methods(uid):
+        await update.message.reply_text(tr("kassa_inc_method_q", uid),
+                                        reply_markup=kb_list(get_kassa_methods(uid), uid, cols=2))
+        return KA_INC_METHOD
+    ctx.user_data["ka_method"] = update.message.text
+    await update.message.reply_text(tr("kassa_inc_desc_q", uid),
+                                    parse_mode="Markdown", reply_markup=kb_back(uid))
+    return KA_INC_DESC
+
+
+async def kassa_inc_desc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_back(update.message.text, uid):
+        await update.message.reply_text(tr("kassa_inc_method_q", uid),
+                                        reply_markup=kb_list(get_kassa_methods(uid), uid, cols=2))
+        return KA_INC_METHOD
+    desc   = update.message.text.strip()
+    amount = ctx.user_data["ka_amount"]
+    method = ctx.user_data["ka_method"]
+    kassa_add({"op_type": "income", "amount": amount, "method": method,
+               "category": "Kirim / Приход", "description": desc,
+               "by_name": sname(uid), "by_id": uid})
+    msg = tr("kassa_inc_done", uid, amount=fmt(amount), method=method, desc=desc)
+    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=kassa_menu_kb(uid))
+    if uid != OWNER_ID:
+        try:
+            await ctx.bot.send_message(OWNER_ID,
+                f"📥 *Kassa kirim: {fmt(amount)} сум*\n💳 {method}\n📝 {desc}\n👤 {sname(uid)}",
+                parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"kassa notify: {e}")
+    return KA_MENU
+
+
+# ── РАСХОД ────────────────────────────────────────────────────────────────
+async def kassa_exp_cat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_back(update.message.text, uid):
+        await update.message.reply_text(tr("kassa_menu_title", uid),
+                                        parse_mode="Markdown", reply_markup=kassa_menu_kb(uid))
+        return KA_MENU
+    cats = [tr("kassa_exp_cat_order", uid),
+            tr("kassa_exp_cat_master", uid),
+            tr("kassa_exp_cat_other", uid)]
+    if update.message.text not in cats:
+        await update.message.reply_text(tr("kassa_exp_cat_q", uid),
+                                        parse_mode="Markdown", reply_markup=kb_list(cats, uid, cols=1))
+        return KA_EXP_CAT
+    ctx.user_data["ka_category"] = update.message.text
+    if update.message.text == tr("kassa_exp_cat_order", uid):
+        orders = open_orders()
+        if not orders:
+            await update.message.reply_text(tr("no_open", uid), reply_markup=kassa_menu_kb(uid))
+            return KA_MENU
+        lines = ["🚗 *Ochiq / Открытые:*\n"]
+        lines += [f"  №{o['id']} | {o['car']} | {o['client']} | {o['master']}" for o in orders]
+        lines.append("\n" + tr("enter_order", uid))
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown",
+                                        reply_markup=kb_back(uid))
+        return KA_EXP_ORDER
+    elif update.message.text == tr("kassa_exp_cat_master", uid):
+        await update.message.reply_text(tr("kassa_exp_master_q", uid),
+                                        reply_markup=kb_list(list(STAFF.values()), uid, cols=1))
+        return KA_EXP_MASTER
+    else:
+        await update.message.reply_text(tr("kassa_exp_desc_q", uid),
+                                        parse_mode="Markdown", reply_markup=kb_back(uid))
+        return KA_EXP_DESC
+
+
+async def kassa_exp_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_back(update.message.text, uid):
+        cats = [tr("kassa_exp_cat_order",uid), tr("kassa_exp_cat_master",uid), tr("kassa_exp_cat_other",uid)]
+        await update.message.reply_text(tr("kassa_exp_cat_q",uid), parse_mode="Markdown",
+                                        reply_markup=kb_list(cats, uid, cols=1))
+        return KA_EXP_CAT
+    try:
+        oid = int(update.message.text.strip())
+        o = get_order(oid)
+        if not o:
+            await update.message.reply_text(tr("not_found", uid)); return KA_EXP_ORDER
+        ctx.user_data["ka_order_id"]  = oid
+        ctx.user_data["ka_order_str"] = f"№{oid} {o['car']} | {o['client']}"
+        await update.message.reply_text(tr("kassa_exp_desc_q", uid),
+                                        parse_mode="Markdown", reply_markup=kb_back(uid))
+        return KA_EXP_DESC
+    except Exception:
+        await update.message.reply_text(tr("enter_num", uid)); return KA_EXP_ORDER
+
+
+async def kassa_exp_master(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_back(update.message.text, uid):
+        cats = [tr("kassa_exp_cat_order",uid), tr("kassa_exp_cat_master",uid), tr("kassa_exp_cat_other",uid)]
+        await update.message.reply_text(tr("kassa_exp_cat_q",uid), parse_mode="Markdown",
+                                        reply_markup=kb_list(cats, uid, cols=1))
+        return KA_EXP_CAT
+    if update.message.text not in list(STAFF.values()):
+        await update.message.reply_text(tr("kassa_exp_master_q", uid),
+                                        reply_markup=kb_list(list(STAFF.values()), uid, cols=1))
+        return KA_EXP_MASTER
+    ctx.user_data["ka_master"] = update.message.text
+    await update.message.reply_text(tr("kassa_exp_desc_q", uid),
+                                    parse_mode="Markdown", reply_markup=kb_back(uid))
+    return KA_EXP_DESC
+
+
+async def kassa_exp_desc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_back(update.message.text, uid):
+        cat = ctx.user_data.get("ka_category", "")
+        if cat == tr("kassa_exp_cat_order", uid):
+            orders = open_orders()
+            lines = ["🚗 *Ochiq / Открытые:*\n"]
+            lines += [f"  №{o['id']} | {o['car']} | {o['client']}" for o in orders]
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=kb_back(uid))
+            return KA_EXP_ORDER
+        elif cat == tr("kassa_exp_cat_master", uid):
+            await update.message.reply_text(tr("kassa_exp_master_q", uid),
+                                            reply_markup=kb_list(list(STAFF.values()), uid, cols=1))
+            return KA_EXP_MASTER
+        else:
+            cats = [tr("kassa_exp_cat_order",uid), tr("kassa_exp_cat_master",uid), tr("kassa_exp_cat_other",uid)]
+            await update.message.reply_text(tr("kassa_exp_cat_q",uid), parse_mode="Markdown",
+                                            reply_markup=kb_list(cats, uid, cols=1))
+            return KA_EXP_CAT
+    ctx.user_data["ka_desc"] = update.message.text.strip()
+    await update.message.reply_text(tr("kassa_exp_amt_q", uid),
+                                    parse_mode="Markdown", reply_markup=kb_back(uid))
+    return KA_EXP_AMT
+
+
+async def kassa_exp_amt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_back(update.message.text, uid):
+        await update.message.reply_text(tr("kassa_exp_desc_q", uid),
+                                        parse_mode="Markdown", reply_markup=kb_back(uid))
+        return KA_EXP_DESC
+    try:
+        ctx.user_data["ka_amount"] = int(update.message.text.replace(" ", ""))
+        await update.message.reply_text(tr("kassa_exp_method_q", uid),
+                                        reply_markup=kb_list(get_kassa_methods(uid), uid, cols=2))
+        return KA_EXP_METHOD
+    except Exception:
+        await update.message.reply_text(tr("enter_num", uid)); return KA_EXP_AMT
+
+
+async def kassa_exp_method(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if is_back(update.message.text, uid):
+        await update.message.reply_text(tr("kassa_exp_amt_q", uid),
+                                        parse_mode="Markdown", reply_markup=kb_back(uid))
+        return KA_EXP_AMT
+    if update.message.text not in get_kassa_methods(uid):
+        await update.message.reply_text(tr("kassa_exp_method_q", uid),
+                                        reply_markup=kb_list(get_kassa_methods(uid), uid, cols=2))
+        return KA_EXP_METHOD
+    amount    = ctx.user_data["ka_amount"]
+    desc      = ctx.user_data.get("ka_desc", "")
+    cat_raw   = ctx.user_data.get("ka_category", "")
+    method    = update.message.text
+    order_id  = ctx.user_data.get("ka_order_id")
+    master    = ctx.user_data.get("ka_master", "")
+    order_str = ctx.user_data.get("ka_order_str", "")
+    cat_display = cat_raw
+    if order_str: cat_display = f"{cat_raw} — {order_str}"
+    elif master:  cat_display = f"{cat_raw} — {master}"
+    kassa_add({"op_type": "expense", "amount": amount, "method": method,
+               "category": cat_display, "description": desc, "order_id": order_id,
+               "master_name": master, "by_name": sname(uid), "by_id": uid})
+    msg = tr("kassa_exp_done", uid, amount=fmt(amount), category=cat_display, desc=desc)
+    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=kassa_menu_kb(uid))
+    if uid != OWNER_ID:
+        try:
+            await ctx.bot.send_message(OWNER_ID,
+                f"📤 *Kassa chiqim: {fmt(amount)} сум*\n📂 {cat_display}\n📝 {desc}\n👤 {sname(uid)}",
+                parse_mode="Markdown")
+        except Exception as e:
+            logger.warning(f"kassa notify: {e}")
+    return KA_MENU
 
 
 async def cmd_kassa(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2449,6 +2990,133 @@ async def callback_details(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════
+# INLINE КАРТОЧКА ЗАЯВКИ
+# ══════════════════════════════════════════════
+async def send_order_card(bot, uid, o, show_margin=False):
+    """Отправляет карточку заявки с inline-кнопками действий"""
+    text = order_short(o, uid, show_margin=show_margin)
+    oid = o["id"]
+    st = o.get("status", "in_work")
+
+    # Кнопки зависят от роли и статуса
+    btn_rows = []
+
+    # Строка 1: основные действия
+    row1 = []
+    if can_pay(uid) and st not in ("closed",):
+        row1.append(InlineKeyboardButton("💰", callback_data=f"quick_pay_{oid}_{uid}"))
+    if can_parts(uid) and st not in ("closed",):
+        row1.append(InlineKeyboardButton("🔩", callback_data=f"quick_part_{oid}_{uid}"))
+    row1.append(InlineKeyboardButton("➕", callback_data=f"quick_svc_{oid}_{uid}"))
+    if st not in ("closed",):
+        row1.append(InlineKeyboardButton("📤", callback_data=f"quick_exp_{oid}_{uid}"))
+    if row1:
+        btn_rows.append(row1)
+
+    # Строка 2: закрыть / статус
+    row2 = []
+    if can_close_order(uid, o) and st not in ("closed",):
+        row2.append(InlineKeyboardButton("✅ " + tr("btn_close", uid), callback_data=f"quick_close_{oid}_{uid}"))
+    row2.append(InlineKeyboardButton("📋", callback_data=f"details_{oid}_{uid}"))
+    if row2:
+        btn_rows.append(row2)
+
+    if not btn_rows:
+        btn_rows = [[InlineKeyboardButton("📋", callback_data=f"details_{oid}_{uid}")]]
+
+    await bot.send_message(
+        chat_id=uid, text=text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(btn_rows)
+    )
+
+
+async def callback_quick(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработчик быстрых inline-кнопок из карточки"""
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    parts = query.data.split("_")
+    # quick_ACTION_OID_CALLERUID
+    action = parts[1]
+    oid = int(parts[2])
+
+    o = get_order(oid)
+    if not o:
+        await query.message.reply_text(tr("not_found", uid))
+        return
+
+    if action == "close":
+        # Быстрое закрытие прямо из карточки
+        if not can_close_order(uid, o):
+            await query.message.reply_text(tr("close_no_right", uid))
+            return
+        if not o.get("payments"):
+            await query.message.reply_text(tr("close_no_pay", uid), parse_mode="Markdown")
+            return
+        remaining = calc_remaining(o)
+        has_debt = any(p.get("is_debt") and not p.get("paid") for p in o.get("payments", []))
+        if remaining > 0 and not has_debt:
+            await query.message.reply_text(tr("close_no_pay", uid), parse_mode="Markdown")
+            return
+        upd_order(oid, {"status": "closed", "closed_time": now_t(),
+                        "closed_date": today_d(), "closed_by": sname(uid)})
+        o = get_order(oid)
+        paid = calc_paid(o)
+        net = paid - calc_expenses(o)
+        summary = tr("close_summary", uid, paid=fmt(paid), exp=fmt(calc_expenses(o)), net=fmt(net))
+        debt_line = tr("close_debt_w", uid) if has_debt else ""
+        msg = tr("close_done", uid, id=oid, car=o["car"], client=o["client"],
+                 phone=o.get("phone", "—"), debt=debt_line, summary=summary)
+        await query.message.reply_text(msg, parse_mode="Markdown")
+        await ctx.bot.send_message(chat_id=OWNER_ID,
+            text=f"🏁 №{oid} yopildi | {o['car']} | {o['client']} | {sname(uid)}",
+            parse_mode="Markdown")
+
+    elif action == "pay":
+        # Запускаем оплату — отвечаем с подсказкой
+        if not can_pay(uid):
+            await query.message.reply_text(tr("no_access", uid))
+            return
+        ctx.user_data.clear()
+        ctx.user_data["order_id"] = oid
+        if calc_total(o) == 0:
+            await query.message.reply_text(tr("pay_no_price", uid, id=oid), parse_mode="Markdown")
+            await query.message.reply_text(tr("pay_set_price", uid), parse_mode="Markdown",
+                                           reply_markup=kb_back(uid))
+            ctx.user_data["quick_flow"] = "pay_price"
+        else:
+            await query.message.reply_text(build_invoice(o, uid), parse_mode="Markdown",
+                                           reply_markup=kb_pay(uid))
+            ctx.user_data["quick_flow"] = "pay_method"
+
+    elif action == "part":
+        if not can_parts(uid):
+            await query.message.reply_text(tr("no_access", uid))
+            return
+        ctx.user_data.clear()
+        ctx.user_data["order_id"] = oid
+        await query.message.reply_text(tr("part_name_q", uid), parse_mode="Markdown",
+                                       reply_markup=kb_back(uid))
+
+    elif action == "svc":
+        ctx.user_data.clear()
+        ctx.user_data["order_id"] = oid
+        svcs = get_available_services(uid)
+        await query.message.reply_text(
+            f"🚗 *{o['car']}* | {o['client']}\n\n" + tr("accept_service", uid),
+            parse_mode="Markdown",
+            reply_markup=kb_list(svcs, uid, cols=2)
+        )
+
+    elif action == "exp":
+        ctx.user_data.clear()
+        ctx.user_data["order_id"] = oid
+        await query.message.reply_text(tr("exp_type_q", uid),
+                                       reply_markup=kb_list(get_expenses_list(uid), uid))
+
+
+# ══════════════════════════════════════════════
 # ОТМЕНА И РОУТЕР
 # ══════════════════════════════════════════════
 async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2592,12 +3260,6 @@ def main():
         TR_MASTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, transfer_master)],
     }, transfer_start))
 
-    # Статус
-    app.add_handler(conv(btns("btn_status"), {
-        ST_ORDER:  [MessageHandler(filters.TEXT & ~filters.COMMAND, status_order)],
-        ST_STATUS: [MessageHandler(filters.TEXT & ~filters.COMMAND, status_set)],
-    }, status_start))
-
     # Редактировать
     app.add_handler(conv(btns("btn_edit"), {
         ED_ORDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_order)],
@@ -2615,6 +3277,21 @@ def main():
     app.add_handler(CommandHandler("qarz",       cmd_close_debt))
 
     # Кнопки меню (group=0)
+    # Касса — полный диалог
+    kassa_btns_list = [T["btn_kassa"]["uz"], T["btn_kassa"]["ru"]]
+    app.add_handler(conv(kassa_btns_list, {
+        KA_MENU:       [MessageHandler(filters.TEXT & ~filters.COMMAND, kassa_menu)],
+        KA_INC_AMT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, kassa_inc_amt)],
+        KA_INC_METHOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, kassa_inc_method)],
+        KA_INC_DESC:   [MessageHandler(filters.TEXT & ~filters.COMMAND, kassa_inc_desc)],
+        KA_EXP_CAT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, kassa_exp_cat)],
+        KA_EXP_ORDER:  [MessageHandler(filters.TEXT & ~filters.COMMAND, kassa_exp_order)],
+        KA_EXP_MASTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, kassa_exp_master)],
+        KA_EXP_DESC:   [MessageHandler(filters.TEXT & ~filters.COMMAND, kassa_exp_desc)],
+        KA_EXP_AMT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, kassa_exp_amt)],
+        KA_EXP_METHOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, kassa_exp_method)],
+    }, kassa_start))
+
     for btn_key, fn in [
         ("btn_kassa",    cmd_kassa),
         ("btn_staff",    cmd_staff),
@@ -2628,24 +3305,39 @@ def main():
         app.add_handler(MessageHandler(filters.Regex(safe_pattern(b)), fn), group=0)
 
     app.add_handler(CallbackQueryHandler(callback_details, pattern="^details_"))
+    app.add_handler(CallbackQueryHandler(callback_quick, pattern="^quick_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
 
-    # Утреннее напоминание — 09:00 Ташкент = 04:00 UTC
-    # Требует: pip install "python-telegram-bot[job-queue]"
-    try:
-        job_queue = app.job_queue
-        if job_queue is not None:
-            job_queue.run_daily(
-                morning_reminder,
-                time=dtime(hour=MORNING_HOUR_UTC, minute=MORNING_MIN_UTC, second=0),
-                name="morning_reminder"
+    # Утреннее напоминание — 09:00 Ташкент (04:00 UTC)
+    # Реализовано через asyncio — без job-queue
+    import asyncio as _asyncio
+
+    async def _morning_loop(application):
+        """Фоновая задача: каждый день в MORNING_HOUR_UTC:MORNING_MIN_UTC UTC"""
+        while True:
+            now = datetime.utcnow()
+            next_run = now.replace(
+                hour=MORNING_HOUR_UTC, minute=MORNING_MIN_UTC,
+                second=5, microsecond=0
             )
-            logger.info("✅ Morning reminder scheduled at 09:00 Tashkent")
-        else:
-            logger.warning("⚠️ JobQueue не установлен — утреннее напоминание отключено. "
-                           'Установи: pip install "python-telegram-bot[job-queue]"')
-    except Exception as e:
-        logger.warning(f"⚠️ JobQueue error: {e} — утреннее напоминание отключено")
+            if next_run <= now:
+                from datetime import timedelta
+                next_run += timedelta(days=1)
+            wait_secs = (next_run - now).total_seconds()
+            logger.info(f"Morning reminder in {int(wait_secs//3600)}h {int((wait_secs%3600)//60)}m")
+            await _asyncio.sleep(wait_secs)
+
+            class _Ctx:
+                bot = application.bot
+            try:
+                await morning_reminder(_Ctx())
+            except Exception as _e:
+                logger.error(f"morning_reminder error: {_e}")
+
+    async def _post_init(application):
+        _asyncio.ensure_future(_morning_loop(application))
+
+    app.post_init = _post_init
 
     print("✅ Avtoservis Bot v3.0 ishga tushdi!")
     app.run_polling(drop_pending_updates=True)
